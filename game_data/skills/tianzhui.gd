@@ -78,23 +78,46 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 	var target: PlayerState = host.state.get_player(response.target_ids[0]) as PlayerState
 	if target == null or not target.alive or not target.chained:
 		return true
-	if response.card_ids.size() == 1:
+	# 原目标身份；费用中换将不对替换角色补伤害。
+	var target_id: int = target.player_id
+	# 原目标代次；横置状态只在选定目标时要求，后续仍以同一角色为准。
+	var target_generation: int = target.character_generation
+	# 可选牌费用；负数表示支付解除自身横置的零牌分支。
+	var cost_card_uid: int = response.card_ids[0] if response.card_ids.size() == 1 else -1
+	if cost_card_uid >= 0:
 		# 选中的手牌；必须仍是普通手牌区中的锦囊牌。
 		var owner: PlayerState = get_owner_skill_player().get_state()
-		var cost_card: CardInstance = owner.find_hand_card(response.card_ids[0]) if owner != null else null
+		# 原费用实体；只在当前同步校验中读取，等待时保存稳定UID。
+		var cost_card: CardInstance = owner.find_hand_card(cost_card_uid) if owner != null else null
 		if cost_card == null or str(GameDatabase.get_card(cost_card.definition_id).get("type", "")) != "trick":
-			return true
-		if not bool(host.call("discard_card_from_hand", owner_player_id, cost_card.uid)):
 			return true
 	else:
 		# 零牌费用仅在自身仍横置时成立；重置失败时不发动技能。
 		var owner_state: PlayerState = get_owner_skill_player().get_state()
-		if owner_state == null or not owner_state.chained or not bool(host.call("set_player_linked", owner_player_id, false, owner_player_id, get_id())):
+		if owner_state == null or not owner_state.chained:
 			return true
-	_used_this_play_phase = true
-	announce_activation({"target_id":target.player_id})
-	observe_identity_behavior([target.player_id], {"target_result":IDENTITY_TARGET_RESULT})
-	get_owner_skill_player().damage(DAMAGE_AMOUNT, get_skill_player(target.player_id), "fire")
+	run_steps([
+		func(sequence: RuleStepSequence) -> void:
+			if cost_card_uid >= 0:
+				sequence.effect_result = host.discard_card_from_hand(owner_player_id, cost_card_uid)
+			else:
+				host.set_player_linked(owner_player_id, false, owner_player_id, get_id()),
+		func(sequence: RuleStepSequence) -> void:
+			# 费用结束后的原角色；不把已失效技能的目标ID用于新武将。
+			var current_target: PlayerState = host.state.get_player(target_id)
+			# 零牌分支的最终横置状态；不以发起请求的bool代替完成事实。
+			var current_owner: PlayerState = get_owner_skill_player().get_state()
+			if current_target == null or not current_target.alive or current_target.character_generation != target_generation or current_owner == null:
+				return
+			if cost_card_uid >= 0 and (sequence.effect_result == null or sequence.effect_result.count <= 0):
+				return
+			if cost_card_uid < 0 and current_owner.chained:
+				return
+			_used_this_play_phase = true
+			announce_activation({"target_id":target_id})
+			observe_identity_behavior([target_id], {"target_result":IDENTITY_TARGET_RESULT})
+			get_owner_skill_player().damage(DAMAGE_AMOUNT, get_skill_player(target_id), "fire"),
+	])
 	return true
 
 

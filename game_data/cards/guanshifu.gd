@@ -73,7 +73,7 @@ func on_slash_dodged(slash_effect: Object, context: Dictionary) -> bool:
 	if slash_effect.host.has_pending_card_choice():
 		return true
 	_apply_cost(slash_effect, cost_context, selected_uids)
-	return false
+	return true
 
 
 ## 支付贯石斧费用并改写 dodged；等待期间换装或费用不足均视为发动失败。
@@ -84,16 +84,23 @@ func _apply_cost(slash_effect: Object, context: Dictionary, selected_uids: Array
 	var equipment_card: CardInstance = slash_effect.host.get_equipment_card(actor_id, "weapon")
 	if equipment_card == null or equipment_card.uid != int(context.get("equipment_uid", -1)):
 		context["dodged"] = true
+		slash_effect.continue_after_weapon_dodged(context)
 		return
 	# 费用边界复核；数量异常或伪造提交贯石斧本体时直接保留【闪】的抵消结果，不移动任何费用牌。
 	if selected_uids.size() != COST_CARD_COUNT or selected_uids.has(equipment_card.uid):
 		context["dodged"] = true
+		slash_effect.continue_after_weapon_dodged(context)
 		return
 	# 实际弃置数量；等待期间牌已移动时支付失败。
-	var discarded_count: int = slash_effect.host.discard_selected_hand_equipment(actor_id, selected_uids)
-	context["dodged"] = discarded_count != COST_CARD_COUNT
-	if discarded_count == COST_CARD_COUNT:
-		slash_effect.host.add_log("%s发动【贯石斧】，令【杀】继续生效。" % slash_effect.state.get_player(actor_id).display_name)
+	slash_effect.host.run_rule_sequence([
+		func(sequence: RuleStepSequence) -> void:
+			sequence.effect_result = slash_effect.host.begin_discard_cards(actor_id, selected_uids, ["hand", "equipment"] as Array[String], actor_id, "guanshi_cost"),
+		func(sequence: RuleStepSequence) -> void:
+			context["dodged"] = sequence.effect_result == null or sequence.effect_result.selected_count != COST_CARD_COUNT
+			if not bool(context["dodged"]):
+				slash_effect.host.add_log("%s发动【贯石斧】，令【杀】继续生效。" % slash_effect.state.get_player(actor_id).display_name)
+			slash_effect.continue_after_weapon_dodged(context)
+	] as Array[Callable])
 
 
 ## 恢复贯石斧费用选择并继续处理最终【闪】结果。
@@ -101,6 +108,4 @@ func continue_slash_choice(slash_effect: Object, context: Dictionary, selected_u
 	if str(context.get("kind", "")) != "guanshi_cost":
 		return false
 	_apply_cost(slash_effect, context, selected_uids)
-	# 最后手牌费用产生的嵌套技能必须先结算；共享组件会在屏障结束后继续最终【闪】结果。
-	slash_effect.continue_or_defer_after_weapon("after_weapon_dodged", context)
 	return true

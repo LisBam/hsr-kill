@@ -12,8 +12,6 @@ const SELF_ACTOR_ID: int = -1
 ## 随机弃牌历史类别；每次发动写入一条随机历史，便于固定种子回放复核。
 const HISTORY_KIND: String = "qihe_random_discard"
 
-## 令牌对持有者无效的延迟收尾类别；弃置可能触发嵌套询问，必须等全部结算完成再置为无效。
-const CONTINUATION_EXCLUDE: String = "qihe_exclude_target"
 
 ## 每1张未知手牌与来牌同花色的概率；手牌花色对外不可见，AI只能按均匀分布估计。
 const SUIT_MATCH_CHANCE_PER_CARD: float = 0.25
@@ -80,25 +78,17 @@ func _on_become_card_target(event: RuleEvent) -> void:
 		return
 	_handled_card_uids[card_uid] = true
 	var discarded_uid: int = same_suit_uids[picked_index]
-	if not bool(host.call("discard_card_from_hand", owner_player_id, discarded_uid)):
-		_handled_card_uids.erase(card_uid)
-		return
-	announce_activation({"card_uid":card_uid, "card_suit":card_suit, "discarded_card_uid":discarded_uid, "target_id":owner_player_id})
 	# 原文顺序：先随机弃置一张，再令此牌对持有者无效。
-	# 弃置可能触发其他技能的嵌套询问；此时延迟到嵌套结算完成后再置为无效，避免使用中的牌被提前改写状态。
-	var continuation: Dictionary = {"kind":CONTINUATION_EXCLUDE, "card_uid":card_uid}
-	if host.has_pending_card_choice():
-		defer_settlement(continuation)
-		return
-	host.call("exclude_card_target", card_uid, owner_player_id, get_id())
-
-
-## 恢复弃置产生的嵌套结算；全部结算完成后令此牌对持有者无效。
-func continue_settlement(context: Dictionary) -> bool:
-	if str(context.get("kind", "")) != CONTINUATION_EXCLUDE:
-		return false
-	host.call("exclude_card_target", int(context.get("card_uid", -1)), owner_player_id, get_id())
-	return true
+	# 原文顺序由公共步骤持有，费用取消不留下错误的已处理标记。
+	run_steps([
+		func(sequence: RuleStepSequence) -> void: sequence.effect_result = host.discard_card_from_hand(owner_player_id, discarded_uid),
+		func(sequence: RuleStepSequence) -> void:
+			if sequence.effect_result == null or sequence.effect_result.count <= 0:
+				_handled_card_uids.erase(card_uid)
+				return
+			announce_activation({"card_uid":card_uid, "card_suit":card_suit, "discarded_card_uid":discarded_uid, "target_id":owner_player_id})
+			host.exclude_card_target(card_uid, owner_player_id, get_id()),
+	])
 
 
 ## 收集持有者手牌中与指定花色相同的牌 UID；顺序沿用权威手牌顺序，保证随机结果可复现。

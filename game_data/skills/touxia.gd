@@ -114,8 +114,11 @@ func _begin_judgment(context: Dictionary) -> void:
 	# 投狭没有简单二元成败；preferred_suit_values 直接表达各花色当前可回收牌的最高价值。
 	var judgment_ai_context: Dictionary = {"preferred_suit_values":preferred_suit_values, "favorable_result_player_values":{str(owner_player_id):AI_JUDGMENT_OWNER_RESULT_VALUE, str(turn_player_id):AI_JUDGMENT_TURN_PLAYER_RESULT_VALUE}}
 	# 最终判定牌；没有判定前交互时同步返回，有【戏法】时由 continue_judgment 恢复。
-	var judgment_card: CardInstance = host.call("request_judgment", owner_player_id, "【投狭】", continuation, judgment_ai_context) as CardInstance
-	if not bool(host.call("has_pending_judgment_request")):
+	# 本次判定的结果对象；嵌套时不使用全局是否存在判定来判断自己的完成状态。
+	var judgment_resolution: RefCounted = host.call("begin_judgment_resolution", owner_player_id, "【投狭】", continuation, judgment_ai_context) as RefCounted
+	# 保留原结果变量；同步结束直接应用，异步结束仍由continue_judgment接收。
+	var judgment_card: CardInstance = judgment_resolution.result as CardInstance
+	if judgment_resolution.completed:
 		_handle_judgment_result(turn_number, turn_player_id, judgment_card)
 
 
@@ -164,22 +167,12 @@ func _open_gain_choice_after_interval(context: Dictionary) -> void:
 func _finish_gain_choice(context: Dictionary, selected_uids: Array[int]) -> void:
 	# 原当前回合角色；无论是否成功获得牌，最后都令该角色摸1张牌。
 	var turn_player_id: int = int(context.get("turn_player_id", -1))
-	# 是否实际获得一张仍合法的弃牌；旧 UID 或花色失效时按未获得处理。
-	var gained_card: bool = false
-	if selected_uids.size() == 1:
-		gained_card = bool(host.call("gain_turn_play_discard_card", owner_player_id, selected_uids[0], int(context.get("turn_number", -1)), turn_player_id, str(context.get("judgment_suit", "")), get_id()))
-	if gained_card and host.has_pending_card_choice():
-		defer_settlement({"kind":"touxia_draw_turn_player", "turn_player_id":turn_player_id})
-		return
-	_draw_turn_player_and_resume(turn_player_id)
-
-
-## 恢复获得牌移动产生的嵌套选择，然后执行投狭固定的当前回合角色摸1张牌。
-func continue_settlement(context: Dictionary) -> bool:
-	if str(context.get("kind", "")) != "touxia_draw_turn_player":
-		return false
-	_draw_turn_player_and_resume(int(context.get("turn_player_id", -1)))
-	return true
+	run_steps([
+		func(_sequence: RuleStepSequence) -> void:
+			if selected_uids.size() == 1:
+				host.gain_turn_play_discard_card(owner_player_id, selected_uids[0], int(context.get("turn_number", -1)), turn_player_id, str(context.get("judgment_suit", "")), get_id()),
+		func(_sequence: RuleStepSequence) -> void: _draw_turn_player_and_resume(turn_player_id),
+	])
 
 
 ## 令原当前回合角色摸1张牌，并通知控制器继续 phaseAfter 外层续接；无效角色由通用 draw 安全忽略。

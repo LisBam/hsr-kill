@@ -226,23 +226,29 @@ func _mode_effect(sequence: RuleStepSequence) -> void:
 			var reward: String = _host.resolve_death_reward(killer_id, victim.player_id, str(_host.state.match_mode))
 			if reward == "teammate_draw":
 				# 2v2：队友死亡后（不论击杀者），存活队友各摸一张；击杀队友无额外惩罚。
+				# 按座次构造一次插入，避免多次insert_steps反转奖励顺序。
+				var reward_steps: Array[Callable] = []
 				for ally: PlayerState in _host.state.players:
 					if ally == null or not ally.alive or ally.out_of_game:
 						continue
 					if ally.player_id == victim.player_id:
 						continue
 					if _host.identity_rules.are_teammates(ally, victim, str(_host.state.match_mode)):
-						_host.draw(ally.player_id, 1)
-						_host.add_log("%s因队友阵亡摸了1张牌。" % ally.display_name)
+						reward_steps.append(_teammate_reward.bind(ally.player_id))
+				sequence.insert_steps(reward_steps)
 			elif reward == "draw_three" and killer != null and killer.alive:
 				_host.draw(killer.player_id, 3)
 			elif reward == KILL_REWARD_DRAW_FOUR_TYPE and killer != null and killer.alive:
 				# 技能改写后的四张牌奖惩；固定摸4张，不叠加身份规则原有的三张或弃置全部牌。
 				_host.draw(killer.player_id, KILL_REWARD_DRAW_FOUR_COUNT)
 			elif reward == "leader_penalty" and killer != null and killer.alive:
-				while not killer.hand.is_empty():
-					_host._move_to_discard(killer.hand.pop_back())
-				_host.discard_all_equipment(killer.player_id, true)
+				# 固定费用范围；逐张完成后才结束死亡奖惩，取消不会无限重试同一张。
+				var penalty_uids: Array[int] = []
+				for candidate: Dictionary in _host.get_hand_equipment_candidates(killer.player_id, killer.player_id):
+					penalty_uids.append(int(candidate.get("uid", -1)))
+				# 罚弃区域；不含判定区与木牛储牌。
+				var penalty_zones: Array[String] = ["hand", "equipment"]
+				_host.begin_discard_cards(killer.player_id, penalty_uids, penalty_zones, killer.player_id, "leader_penalty")
 				_host.add_log("领袖杀死忠臣，弃置全部手牌和装备。")
 		"revival":
 			victim.hp = victim.max_hp
@@ -336,3 +342,9 @@ func _cleanup(sequence: RuleStepSequence) -> void:
 ## 死亡时机共享父事件与原武将代次；同一窗口派发完成后才进入下个步骤。
 func _emit(sequence: RuleStepSequence, timing_name: String) -> void:
 	_host.emit_sequence_timing(sequence, timing_name, int(sequence.context.victim_id), int(sequence.context.killer_id), int(sequence.context.victim_id), sequence.context.event_data, int(sequence.context.get("death_event_id", -2)))
+
+
+## 单名队友奖励独占步骤；其摸牌时机排空后才处理后续奖励。
+func _teammate_reward(_sequence: RuleStepSequence, player_id: int) -> void:
+	_host.draw(player_id, 1)
+	_host.add_log("%s因队友阵亡摸了1张牌。" % _host.format_player_log_name(player_id))

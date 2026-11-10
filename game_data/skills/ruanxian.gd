@@ -24,9 +24,6 @@ const MEIZHAN_SKILL_ID: String = "meizhan"
 ## 选牌请求的业务键；continue_selection 按它分流。
 const CHOICE_KIND: String = "ruanxian_recast_trick"
 
-## 续结算业务键；重铸完成后按它兑现摸牌。
-const SETTLEMENT_KIND: String = "ruanxian_after_recast"
-
 ## 重建入口业务键；结束阶段存在嵌套屏障时登记它，等屏障解除后重新创建同一条请求。
 const REBUILD_KIND: String = "ruanxian_rebuild_entry"
 
@@ -189,40 +186,44 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 	var cost_card: CardInstance = owner.find_hand_card(response.card_ids[0])
 	if cost_card == null or not _has_suit_quota(cost_card.definition_id, cost_card.suit):
 		return true
-	# 先重铸；返回 false（牌已离手等）表示费用未支付，此时不记账也不进入后续效果。
-	if not bool(host.call("recast_hand_card", owner_player_id, cost_card.uid)):
-		return true
-	# 记账时机严格在重铸成功之后：全局花色额度只被真实发生的重铸消耗。
-	_mark_used_suit(cost_card.suit)
-	announce_activation({"recast_definition_id":cost_card.definition_id, "recast_suit":cost_card.suit, "beneficiary_ids":_get_other_meizhan_holder_ids()})
-	# 摸牌登记到延后结算队列：重铸的补摸属于规则续接，结算管线先排空它再回调 continue_settlement，
-	# 因此“先重铸（含补摸）、后令其他持有者摸牌”这一顺序得到严格保证。
-	if defer_settlement({"kind":SETTLEMENT_KIND}):
-		return true
-	# 兜底：登记失败（技能代次失效等）时同步兑现摸牌，保证效果不丢失。
-	_resolve_beneficiary_draw()
+	# 费用稳定快照；成功后记录原花色与牌名。
+	var cost_uid: int = cost_card.uid
+	# 原费用花色；跨等待只保留标量。
+	var cost_suit: String = cost_card.suit
+	# 原费用牌名；移牌清理临时视为后仍按发动时牌面记录。
+	var cost_definition_id: String = cost_card.definition_id
+	run_steps([
+		func(sequence: RuleStepSequence) -> void: sequence.effect_result = host.recast_hand_card(owner_player_id, cost_uid),
+		func(sequence: RuleStepSequence) -> void:
+			if sequence.effect_result == null or sequence.effect_result.count <= 0:
+				sequence.finish()
+				return
+			_mark_used_suit(cost_suit)
+			announce_activation({"recast_definition_id":cost_definition_id, "recast_suit":cost_suit, "beneficiary_ids":_get_other_meizhan_holder_ids()}),
+		func(_sequence: RuleStepSequence) -> void: _resolve_beneficiary_draw(),
+	])
 	return true
 
 
-## 恢复延后步骤：REBUILD_KIND 重建入口，SETTLEMENT_KIND 兑现其他持有者摸牌。
+## 恢复结束阶段存在外部选择时登记的重建入口；费用后续由公共步骤内容持有。
 func continue_settlement(context: Dictionary) -> bool:
 	# 重建入口：屏障解除后重新复核条件并重建同一条请求；期间条件已不成立则安静结束。
 	if str(context.get("kind", "")) == REBUILD_KIND:
 		if _can_offer():
 			_request_recast_selection()
 		return true
-	if str(context.get("kind", "")) != SETTLEMENT_KIND:
-		return false
-	_resolve_beneficiary_draw()
-	return true
+	return false
 
 
 ## 令所有其他“梅绽”持有者各摸一张牌；受益人集合在兑现这一刻重新计算，反映等待期间的变化。
 func _resolve_beneficiary_draw() -> void:
 	if host == null:
 		return
+	# 每名受益人的摸牌互为连续步骤，前一人的After完成后再轮到下一人。
+	var steps: Array[Callable] = []
 	for player_id: int in _get_other_meizhan_holder_ids():
-		host.call("draw", player_id, DRAW_COUNT)
+		steps.append(func(_sequence: RuleStepSequence) -> void: host.draw(player_id, DRAW_COUNT))
+	run_steps(steps)
 
 
 ## 返回本次重铸的机会成本；取“AI 实际会选中的最低价值候选”折算。

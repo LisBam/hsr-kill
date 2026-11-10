@@ -37,11 +37,6 @@ func _init() -> void:
 	})
 
 
-## 安装连续虚拟牌结束监听；弑魂没有额外被动时机。
-func install() -> void:
-	install_virtual_card_sequence_listener()
-
-
 ## 按当前轮回节检查阶段、通用额度与固定火【杀】目标组合是否合法。
 func can_activate(_context: Dictionary = {}) -> bool:
 	# 技能持有者；死亡、离场或非自身出牌阶段均不能发动。
@@ -87,11 +82,6 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 	if response.confirmed and not response.target_ids.is_empty():
 		_start_shihun_sequence(INCOMING_FIRE_SLASH_SECTION_INDEX, response.target_ids)
 	return true
-
-
-## 优先处理连续虚拟牌恢复；其他上下文不是弑魂结算。
-func continue_settlement(context: Dictionary) -> bool:
-	return continue_virtual_card_sequence_settlement(context)
 
 
 ## 返回本次无法发动的准确原因；优先区分【永劫】每回合限次，

@@ -185,21 +185,11 @@ func _begin_pick() -> void:
 func _apply_pick(selected_uids: Array[int]) -> void:
 	if selected_uids.is_empty() or host == null:
 		return
-	# 实际弃置成功的颜色；单张失败不影响其余牌，因此逐张调用统一弃置端口。
-	var discarded_colours: Array[String] = []
+	# 每张颜色记录在其完整弃牌内容结束后写入，后续材料等待前一张。
+	var steps: Array[Callable] = []
 	for card_uid: int in selected_uids:
-		# 本张牌的颜色；弃置失败时为空串，不写入记录。
-		var colour: String = _discard_one_card(card_uid)
-		if colour.is_empty():
-			continue
-		if not discarded_colours.has(colour):
-			discarded_colours.append(colour)
-	if discarded_colours.is_empty():
-		return
-	_active = true
-	for colour: String in discarded_colours:
-		if not _discarded_colours.has(colour):
-			_discarded_colours.append(colour)
+		steps.append(_discard_one_step.bind(card_uid))
+	run_steps(steps)
 
 
 ## 枚举权威合法组合：任意单张，以及任意两张异色牌；额外包含空组合，使「什么都不选就确认」
@@ -251,9 +241,12 @@ func _resolve_phase_result() -> void:
 	# 额外摸牌张数；两种颜色都重合时才成立，与护盾叠加生效。
 	var draw_count: int = DRAW_ON_BOTH_COLOURS if common_colours.size() >= BOTH_COLOURS_COMMON_COUNT else 0
 	announce_activation({ACTIVATION_COMMON_KEY:common_colours.duplicate(), ACTIVATION_SHIELD_KEY:SHIELD_PER_COMMON_COLOUR, ACTIVATION_DRAW_KEY:draw_count})
-	host.call("shield", owner_player_id, SHIELD_PER_COMMON_COLOUR, owner_player_id, get_id())
-	if draw_count > 0:
-		host.call("draw", owner_player_id, draw_count)
+	run_steps([
+		func(_sequence: RuleStepSequence) -> void: host.call("shield", owner_player_id, SHIELD_PER_COMMON_COLOUR, owner_player_id, get_id()),
+		func(_sequence: RuleStepSequence) -> void:
+			if draw_count > 0:
+				host.call("draw", owner_player_id, draw_count),
+	])
 
 
 ## 清空本次摸牌阶段的记录并绑定当前回合号；每次进入摸牌阶段都会重新绑定，旧回合的迟到事件因此失效。
@@ -291,18 +284,22 @@ func _candidate_colour(candidate: Dictionary) -> String:
 
 
 ## 弃置持有者的一张牌并返回其颜色；弃置失败时返回空串，调用方不得记录该颜色。
-func _discard_one_card(card_uid: int) -> String:
-	# 待弃置实体；必须在弃置前读取颜色，弃置后它已经离开持有者区域。
+func _discard_one_step(_sequence: RuleStepSequence, card_uid: int) -> void:
+	# 待弃置实体；颜色在提交前记录，取消不写入技能状态。
 	var card: CardInstance = _find_owned_card(card_uid)
 	if card == null:
-		return ""
-	# 实体当前颜色；弃置前读取，保证记录的是玩家实际看到的那张牌的颜色。
+		return
+	# 本次材料的原颜色；后置视为清理不改变费用记录。
 	var colour: String = card.get_color()
-	# 弃置请求载荷；统一弃置端口按 UID 在三个区域中查找，因此手牌与装备区共用同一条路径。
+	# 独立一张费用；后续颜色仅在实际成功后累加。
 	var selected_uids: Array[int] = [card_uid]
-	if int(host.call("discard_selected_hand_equipment", owner_player_id, selected_uids)) != 1:
-		return ""
-	return colour
+	host.call("discard_selected_hand_equipment", owner_player_id, selected_uids, func(discarded_count: int) -> void:
+		if discarded_count <= 0:
+			return
+		_active = true
+		if not _discarded_colours.has(colour):
+			_discarded_colours.append(colour)
+	)
 
 
 ## 按稳定 UID 在持有者手牌区与装备区中查找实体；未找到时返回 null。

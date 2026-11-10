@@ -61,13 +61,14 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 		return false
 	if response.confirmed and response.card_ids.size() == 1:
 		# 实际弃置数量；等待期间材料离区时不消耗技能次数，也不建立错误的伤害关联。
-		var discarded_count: int = int(host.call("discard_selected_hand_equipment", owner_player_id, response.card_ids))
-		if discarded_count == 1:
-			_used_this_play_phase = true
-			announce_activation({"slash_uid":int(context.get("slash_uid", -1))})
-			_tracked_slash_uid = int(context.get("slash_uid", -1))
-			_tracked_slash_card_id = str(context.get("slash_card_id", ""))
-			_tracked_slash_dealt_damage = false
+		host.call("discard_selected_hand_equipment", owner_player_id, response.card_ids, func(discarded_count: int) -> void:
+			if discarded_count > 0:
+				_used_this_play_phase = true
+				announce_activation({"slash_uid":int(context.get("slash_uid", -1))})
+				_tracked_slash_uid = int(context.get("slash_uid", -1))
+				_tracked_slash_card_id = str(context.get("slash_card_id", ""))
+				_tracked_slash_dealt_damage = false
+		)
 	return true
 
 

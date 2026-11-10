@@ -52,13 +52,25 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 		return true
 	# 当前费用UID；仅接受普通手牌区中的【闪】。
 	var shan_uid: int = response.card_ids[0]
-	if not _is_hand_shan(shan_uid) or not bool(host.call("discard_card_from_hand", owner_player_id, shan_uid)):
+	if not _is_hand_shan(shan_uid):
 		return true
-	# 横置状态切换；目标已横置时再次横置会恢复竖直，但仍照常令本次黑色【杀】无效。
-	host.call("toggle_player_linked", target_id, owner_player_id, get_id())
-	host.call("exclude_card_target", card_uid, target_id, get_id())
-	announce_activation({"card_uid":card_uid, "cost_card_uid":shan_uid, "target_id":target_id})
-	observe_identity_behavior([target_id], {"target_result":1.0})
+	# 原目标代次；支付窗口换将后不对替换角色施加旧效果。
+	var target_generation: int = target.character_generation
+	run_steps([
+		func(sequence: RuleStepSequence) -> void: sequence.effect_result = host.discard_card_from_hand(owner_player_id, shan_uid),
+		func(sequence: RuleStepSequence) -> void:
+			# 完整费用结果；取消不横置目标，也不排除来牌。
+			var current_target: PlayerState = host.state.get_player(target_id)
+			if sequence.effect_result == null or sequence.effect_result.count <= 0 or current_target == null or not current_target.alive or current_target.out_of_game or current_target.character_generation != target_generation or not host.is_processing_black_slash(card_uid):
+				sequence.finish()
+				return
+			# 横置状态切换；目标已横置时再次横置会恢复竖直，但仍照常令本次黑色【杀】无效。
+			host.toggle_player_linked(target_id, owner_player_id, get_id()),
+		func(_sequence: RuleStepSequence) -> void:
+			host.exclude_card_target(card_uid, target_id, get_id())
+			announce_activation({"card_uid":card_uid, "cost_card_uid":shan_uid, "target_id":target_id})
+			observe_identity_behavior([target_id], {"target_result":1.0}),
+	])
 	return true
 
 

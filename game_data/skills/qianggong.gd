@@ -46,16 +46,20 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 	var cost_definition: Dictionary = GameDatabase.get_card(cost_card.definition_id)
 	var is_weapon: bool = str(cost_definition.get("type", "")) == "equipment" and str(cost_definition.get("subtype", "")) == "weapon"
 	var cost_color: String = cost_card.get_color()
-	if int(host.call("discard_selected_hand_equipment", owner_player_id, response.card_ids)) != 1:
-		return true
-	var parent_card_uid: int = int(context.get("card_uid", -1))
-	var target_id: int = int(context.get("target_id", -1))
-	if is_weapon or cost_color == "red":
-		host.call("add_card_direct_hit_target", parent_card_uid, target_id, get_id())
-	if is_weapon or cost_color == "black":
-		host.call("add_card_target_damage_bonus", parent_card_uid, target_id, 1, get_id())
-	announce_activation({"card_uid":parent_card_uid, "target_id":target_id, "cost_card_uid":cost_card.uid, "direct_hit":is_weapon or cost_color == "red", "damage_bonus":1 if is_weapon or cost_color == "black" else 0})
-	observe_identity_behavior([target_id], {"target_result":IDENTITY_TARGET_RESULT, "damage":is_weapon or cost_color == "black", "respond_shan":not (is_weapon or cost_color == "red")})
+	host.call("discard_selected_hand_equipment", owner_player_id, response.card_ids, func(discarded_count: int) -> void:
+		if discarded_count <= 0:
+			return
+		# 原父牌身份；子步骤结束后仍按同一逻辑牌记录目标修正。
+		var parent_card_uid: int = int(context.get("card_uid", -1))
+		# 原目标身份；不通过可变目标游标推测下一名角色。
+		var target_id: int = int(context.get("target_id", -1))
+		if is_weapon or cost_color == "red":
+			host.call("add_card_direct_hit_target", parent_card_uid, target_id, get_id())
+		if is_weapon or cost_color == "black":
+			host.call("add_card_target_damage_bonus", parent_card_uid, target_id, 1, get_id())
+		announce_activation({"card_uid":parent_card_uid, "target_id":target_id, "cost_card_uid":cost_card.uid, "direct_hit":is_weapon or cost_color == "red", "damage_bonus":1 if is_weapon or cost_color == "black" else 0})
+		observe_identity_behavior([target_id], {"target_result":IDENTITY_TARGET_RESULT, "damage":is_weapon or cost_color == "black", "respond_shan":not (is_weapon or cost_color == "red")})
+	)
 	return true
 
 
@@ -82,6 +86,7 @@ func score_ai_choice(authoritative_snapshot: Dictionary, choice_request: Diction
 	var selected_cards: Array = payload.get("selected_card_uids", []) as Array
 	if selected_cards.size() != 1:
 		return 0.0
+	# 原目标身份；不通过可变目标游标推测下一名角色。
 	var target_id: int = int(context.get("target_id", -1))
 	var attitude: float = evaluator.get_attitude(authoritative_snapshot, owner_player_id, target_id)
 	if attitude >= 0.0:

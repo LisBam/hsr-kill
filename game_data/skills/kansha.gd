@@ -104,12 +104,14 @@ func _execute_discard_section(card_uid: int, expected_section_index: int) -> boo
 		return false
 	# 单张费用UID数组；显式强类型保证动态控制器调用与公开端口签名一致。
 	var selected_uids: Array[int] = [card_uid]
-	if int(host.call("discard_selected_hand_equipment", owner_player_id, selected_uids)) != 1:
-		# 弃置数量不符说明费用没有真正支付：必须复位本次发动的归属快照，否则它会被后续无关的完成入口误登记为已用轮回节。
-		cancel_reincarnation_activation()
-		return false
-	announce_activation({"section_number":expected_section_index + 1, "round_count":get_reincarnation_round_count(), "discarded_card_uid":card_uid})
-	complete_reincarnation_activation()
+	host.call("discard_selected_hand_equipment", owner_player_id, selected_uids, func(discarded_count: int) -> void:
+		if discarded_count <= 0:
+			# 弃置数量不符说明费用没有真正支付：必须复位本次发动的归属快照，否则它会被后续无关的完成入口误登记为已用轮回节。
+			cancel_reincarnation_activation()
+			return
+		announce_activation({"section_number":expected_section_index + 1, "round_count":get_reincarnation_round_count(), "discarded_card_uid":card_uid})
+		complete_reincarnation_activation()
+	)
 	return true
 
 

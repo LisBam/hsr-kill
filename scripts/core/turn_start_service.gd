@@ -114,7 +114,14 @@ func _check_face_down(sequence: RuleStepSequence) -> void:
 ## 「武将牌始终背面向上」类锁定技会拒绝本次翻至正面，此时日志必须与事实一致，不能写成已经翻回正面。
 func _turn_face_up(sequence: RuleStepSequence) -> void:
 	# 本次翻面（正面→背面之外的“背面→正面”方向）是否真的发生；由统一翻面入口给出唯一结论。
-	var turned_face_up: bool = _host.turn_over_player(int(sequence.context.player_id), int(sequence.context.player_id), "turn_start_skip")
+	sequence.effect_result = _host.turn_over_player(int(sequence.context.player_id), int(sequence.context.player_id), "turn_start_skip")
+	sequence.insert_steps([_record_face_up_result])
+
+
+## 翻面完整结束后才记录跳过结果；phaseCancelled与phaseOver仍由外层后续步骤发布。
+func _record_face_up_result(sequence: RuleStepSequence) -> void:
+	# 实际翻面结果；前置取消或锁定失败不能写成已经翻回正面。
+	var turned_face_up: bool = sequence.effect_result != null and sequence.effect_result.success
 	if turned_face_up:
 		_host.add_log("%s翻回正面并跳过本回合。" % _host.format_player_state_log_name(_host.state.get_player(int(sequence.context.player_id))))
 		return

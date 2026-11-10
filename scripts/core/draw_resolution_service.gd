@@ -5,6 +5,9 @@ extends RefCounted
 ## 当前权威控制器；仅通过稳定公开规则端口访问对局状态。
 var _host: Object
 
+## 当前单张获得游标；摸牌批次持有自身结果，不把成员登记到全局异步栈。
+var _movement: CardMoveResolutionService
+
 
 ## 绑定本局规则宿主；服务不拥有控制器生命周期。
 func _init(host: Object) -> void:
@@ -30,6 +33,8 @@ func draw(player_id: int, count: int, announce: bool, allow_out_of_game: bool) -
 		"current_card_uid":-1,
 		"current_move_id":-1,
 		"cancelled":false,
+		"deck_exhausted":false,
+		"event_id":_host._current_rule_parent_event_id(),
 		"batch_started":false,
 		"previous_batch":{},
 		"result_data":{},
@@ -79,6 +84,11 @@ func _prepare_batch(sequence: RuleStepSequence) -> void:
 	if not _valid_target(sequence) or bool(sequence.context.cancelled):
 		sequence.finish()
 		return
+	# Begin也必须读取同一个原窗口的最终取消状态；不先建立表现或获得批次。
+	if sequence.waiting_event != null and (sequence.waiting_event.cancelled or sequence.waiting_event.neutralized):
+		sequence.context["cancelled"] = true
+		sequence.insert_steps([_emit_cancelled])
+		return
 	# Begin的最终修改；负数归零，触发器不能构造反向摸牌。
 	var final_count: int = maxi(int(sequence.waiting_event.data.get("count", sequence.context.requested_count)) if sequence.waiting_event != null else int(sequence.context.requested_count), 0)
 	sequence.waiting_event = null
@@ -96,10 +106,11 @@ func _prepare_batch(sequence: RuleStepSequence) -> void:
 	# 开局前分发起始手牌期间不建立获得批次：那是开局前的准备行为而不是对局内的获得，
 	# 若建立批次会让「当你获得牌时」类技能（例如【风口】）在手气卡阶段之前弹出询问并占住阶段。
 	if not bool(_host._before_match_start_deal_active):
-		_host._begin_gain_batch(int(sequence.context.player_id), "draw")
+		sequence.context["gain_batch_id"] = _host._next_gain_batch_id
+		_host._next_gain_batch_id += 1
 		sequence.context["gain_batch_started"] = true
 	_host.draw_presentation_batch_started.emit(int(batch.batch_id), int(batch.player_id))
-	sequence.insert_steps([_draw_next_card, _draw_end, _draw_after, _finish_batch])
+	sequence.insert_steps([_draw_next_card, _draw_end, _draw_after, _finish_presentation, _finish_gain_batch, _finish_batch, _end_exhausted_draw])
 
 
 ## 取当前牌堆顶并插入其获得牌完整时序；每次只创建一张牌的有限步骤。
@@ -109,82 +120,23 @@ func _draw_next_card(sequence: RuleStepSequence) -> void:
 	if _host.state.draw_pile.is_empty():
 		_host._reshuffle_discard_pile()
 	if _host.state.draw_pile.is_empty():
-		_finish_batch(sequence)
-		_host._end_match_as_draw("deck_empty_draw")
-		sequence.finish()
+		sequence.context["deck_exhausted"] = true
 		return
 	# 当前牌堆顶；仅保存UID，后续步骤从权威区域重新查找。
 	var card: CardInstance = _host.state.draw_pile.back() as CardInstance
 	sequence.context["current_card_uid"] = card.uid
 	sequence.context["source_zone"] = "draw_pile"
 	sequence.context["remaining_count"] = int(sequence.context.remaining_count) - 1
-	sequence.context["gain_cancelled"] = false
-	sequence.context["current_move_id"] = -1
-	var steps: Array[Callable] = [
-		Callable(self, "_gain_timing").bind("gainBefore"),
-		Callable(self, "_gain_timing").bind("gainBegin"),
-		_draw_card_commit,
-		Callable(self, "_gain_result_timing").bind("gainEnd"),
-		Callable(self, "_gain_result_timing").bind("gainAfter"),
-		_draw_next_card,
-	]
-	sequence.insert_steps(steps)
+	_movement = CardMoveResolutionService.new(_host)
+	sequence.insert_steps([_record_drawn_card, _draw_next_card])
+	_movement.begin(sequence, card.uid, "hand", int(sequence.context.player_id), "draw", int(sequence.context.event_id), "", [int(sequence.context.player_id)] as Array[int], false, false, -2, bool(sequence.context.allow_out_of_game))
 
 
-## 等待gain前置窗口并读取同一实体牌的最终结果。
-func _gain_timing(sequence: RuleStepSequence, timing_name: String) -> void:
-	if not _valid_target(sequence) or bool(sequence.context.gain_cancelled):
-		return
-	# 原窗口最终数据；gainBegin读取gainBefore的实时修改。
-	var event_data: Dictionary = _gain_event_data(sequence)
-	if sequence.waiting_event != null:
-		var previous: RuleEvent = sequence.waiting_event
-		sequence.waiting_event = null
-		if previous.cancelled or previous.neutralized:
-			sequence.context["gain_cancelled"] = true
-			return
-	_host.emit_sequence_timing(sequence, timing_name, int(sequence.context.player_id), -1, int(sequence.context.player_id), event_data)
+## 单张完整获得后只记录本次成功事实；取消或嵌套移走材料不混入其他摸牌批次。
+func _record_drawn_card(sequence: RuleStepSequence) -> void:
+	if _movement != null and bool(_movement.result.get("success", false)):
+		(sequence.context.drawn_uids as Array).append(int(_movement.result.card_uid))
 
-
-## 只在两个gain前置窗口通过后移动牌；取消时牌仍留在牌堆。
-func _draw_card_commit(sequence: RuleStepSequence) -> void:
-	if not _valid_target(sequence) or bool(sequence.context.gain_cancelled):
-		return
-	# gainBegin事件可能在其触发器中被取消；提交步骤必须先读取最终状态。
-	if sequence.waiting_event != null:
-		var previous_event: RuleEvent = sequence.waiting_event
-		sequence.waiting_event = null
-		if previous_event.cancelled or previous_event.neutralized:
-			sequence.context["gain_cancelled"] = true
-			return
-	# 当前目标牌；暂停期间可能已被其他合法效果移动。
-	var card: CardInstance = _find_card(int(sequence.context.current_card_uid))
-	if card == null or not _host.state.draw_pile.has(card):
-		sequence.context["gain_cancelled"] = true
-		return
-	_host._ensure_card_movement()
-	# 可见观察者数组；CardMovementService要求调用方提供严格类型。
-	var visible_to: Array[int] = [int(sequence.context.player_id)]
-	var move: CardMoveEvent = _host.card_movement.move_card(card, "hand", int(sequence.context.player_id), "draw", _host.state.current_event_id, "", visible_to)
-	if move == null:
-		sequence.context["gain_cancelled"] = true
-		return
-	sequence.context.drawn_uids.append(card.uid)
-	# 计入获得批次；摸牌绕过统一移牌管线直接调用移牌服务，因此必须在此显式登记同一批次的成员。
-	# 开局前分发起始手牌期间没有开启批次，此处同样不登记，避免误挂到外层批次上。
-	if not bool(_host._before_match_start_deal_active):
-		_host._register_gain_into_batch(card.uid)
-	sequence.context["current_move_id"] = move.move_id
-
-
-## 摸牌移动完成后依次等待gainEnd与gainAfter；前置取消不会伪造后置事实。
-func _gain_result_timing(sequence: RuleStepSequence, timing_name: String) -> void:
-	if not _same_generation(sequence) or bool(sequence.context.gain_cancelled):
-		return
-	var event_data: Dictionary = _gain_event_data(sequence)
-	if timing_name == "gainEnd":
-		event_data["move_id"] = int(sequence.context.current_move_id)
-	_host.emit_sequence_timing(sequence, timing_name, int(sequence.context.player_id), -1, int(sequence.context.player_id), event_data)
 
 
 ## 摸牌完成事实及统计先提交，再开放drawEnd和drawAfter。
@@ -206,18 +158,18 @@ func _draw_after(sequence: RuleStepSequence) -> void:
 	_host.emit_sequence_timing(sequence, "drawAfter", int(sequence.context.player_id), -1, int(sequence.context.player_id), sequence.context.result_data)
 
 
-## 事实通知全部完成后结束表现批次并恢复嵌套批次。
-func _finish_batch(sequence: RuleStepSequence) -> void:
-	# 获得批次收尾；幂等标志保证牌堆耗尽路径与正常收尾路径都只关闭一次。
-	# 先于表现批次关闭，使 cardsGainedBatchAfter 在 drawEnd/drawAfter 之后、表现收尾之前派发。
-	if bool(sequence.context.get("gain_batch_started", false)):
-		sequence.context["gain_batch_started"] = false
-		_host._end_gain_batch()
+## 实体摸牌及drawAfter结束后关闭表现收集；规则批次仍继续等待获得技能，不让交互阻止动画登记。
+func _finish_presentation(sequence: RuleStepSequence) -> void:
 	if bool(sequence.context.batch_started):
 		# 当前批次；完成信号发出时仍能读取本批ID。
 		var batch: Dictionary = _host._active_draw_presentation_batch as Dictionary
 		_host.draw_presentation_batch_finished.emit(int(batch.get("batch_id", -1)), int(sequence.context.player_id))
 		_host._active_draw_presentation_batch = (sequence.context.previous_batch as Dictionary).duplicate(true)
+	sequence.context["batch_started"] = false
+
+
+## 完整获得批次及其子效果结束后记录摸牌日志；表现收集已独立关闭，不提前结束规则。
+func _finish_batch(sequence: RuleStepSequence) -> void:
 	if bool(sequence.context.announce) and not (sequence.context.drawn_uids as Array).is_empty():
 		# 摸牌角色在通知期间可能已死亡；日志名称读取仍有效的稳定状态。
 		var player: PlayerState = _host.state.get_player(int(sequence.context.player_id))
@@ -225,14 +177,19 @@ func _finish_batch(sequence: RuleStepSequence) -> void:
 			_host.add_log("%s摸了%d张牌。" % [_host.format_player_state_log_name(player), (sequence.context.drawn_uids as Array).size()])
 
 
-## 构建单牌获得时机数据；不把CardInstance引用放入跨等待上下文。
-func _gain_event_data(sequence: RuleStepSequence) -> Dictionary:
-	# 当前实体UID；移动前必须仍在牌堆，移动后用于公开事件关联。
-	var card_uid: int = int(sequence.context.current_card_uid)
-	# 当前牌面对象；找不到时保持稳定空区域描述。
-	var card: CardInstance = _find_card(card_uid)
-	# 实际来源；迁移期间只允许从当前 draw_pile 进入指定手牌。
-	return {"card_uids":[card_uid], "from_zone":str(sequence.context.get("source_zone", "draw_pile")), "to_zone":"hand", "source_player_id":-1, "target_player_id":int(sequence.context.player_id), "reason":"draw", "move_id":int(sequence.context.current_move_id)}
+## 摸牌事实之后只发布本请求自己的获得批次；表现收集已关闭，父规则继续等待其全部子内容。
+func _finish_gain_batch(sequence: RuleStepSequence) -> void:
+	if not bool(sequence.context.get("gain_batch_started", false)):
+		return
+	sequence.context["gain_batch_started"] = false
+	if not (sequence.context.drawn_uids as Array).is_empty():
+		sequence.wait_for_timing(_host.emit_sequence_timing(sequence, "cardsGainedBatchAfter", int(sequence.context.player_id), int(sequence.context.player_id), -1, {"gain_batch_id":int(sequence.context.gain_batch_id), "card_uids":(sequence.context.drawn_uids as Array).duplicate(), "receiver_player_id":int(sequence.context.player_id), "reason":"draw", "batch_size":(sequence.context.drawn_uids as Array).size()}, int(sequence.context.event_id)))
+
+
+## 原牌堆确实耗尽时在已发生事实和批次完整结束后判平局，不越过批次After中的子选择。
+func _end_exhausted_draw(sequence: RuleStepSequence) -> void:
+	if bool(sequence.context.deck_exhausted) and _host.state.draw_pile.is_empty() and _host.state.discard_pile.is_empty():
+		_host._end_match_as_draw("deck_empty_draw")
 
 
 ## 校验目标仍是本次摸牌时的角色实例。
@@ -258,9 +215,3 @@ func _same_generation(sequence: RuleStepSequence) -> bool:
 	# 当前目标实例；结果通知沿用摸牌发生时的武将代次。
 	var player: PlayerState = _host.state.get_player(int(sequence.context.player_id))
 	return player != null and player.character_generation == int(sequence.context.generation)
-
-
-## 按稳定UID从权威牌区找回实体；异步内容不保留CardInstance在上下文中。
-func _find_card(card_uid: int) -> CardInstance:
-	var location: Dictionary = _host._find_card_location_by_uid(card_uid)
-	return location.get("card") as CardInstance

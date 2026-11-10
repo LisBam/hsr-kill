@@ -59,24 +59,28 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 		return true
 	_used_suits_this_round[card.suit] = true
 	var phase_name: String = str(context.get("phase_name", ""))
-	announce_activation({"card_uid":card.uid, "suit":card.suit, "phase_name":phase_name})
-	if not bool(host.call("recast_hand_card", owner_player_id, card.uid)):
-		_used_suits_this_round.erase(card.suit)
-		return true
-	var continuation: Dictionary = {"kind":"xianzou_after_recast", "phase_name":phase_name}
-	if host.has_pending_card_choice():
-		defer_settlement(continuation)
-	else:
-		_continue_after_recast(continuation)
+	# 本次费用快照；取消时仅释放本轮预留，不回滚其他轮次的记录。
+	var cost_uid: int = card.uid
+	# 原花色；离手与换将后不读取旧实体。
+	var cost_suit: String = card.suit
+	# 预留所属轮次；嵌套推进新一轮后不擦除新记录。
+	var reserved_round: int = _tracked_round_number
+	run_steps([
+		func(sequence: RuleStepSequence) -> void: sequence.effect_result = host.recast_hand_card(owner_player_id, cost_uid),
+		func(sequence: RuleStepSequence) -> void:
+			if sequence.effect_result == null or sequence.effect_result.count <= 0:
+				if _tracked_round_number == reserved_round:
+					_used_suits_this_round.erase(cost_suit)
+				return
+			announce_activation({"card_uid":cost_uid, "suit":cost_suit, "phase_name":phase_name})
+			_continue_after_recast({"phase_name":phase_name}),
+	])
 	return true
 
 
 ## 恢复重铸或调整手牌数产生的嵌套选择，并进入对应阶段跳过步骤。
 func continue_settlement(context: Dictionary) -> bool:
 	var choice_kind: String = str(context.get("kind", ""))
-	if choice_kind == "xianzou_after_recast":
-		_continue_after_recast(context)
-		return true
 	if choice_kind == "xianzou_skip_phase":
 		host.call("skip_current_main_phase", owner_player_id, str(context.get("phase_name", "")), get_id())
 		return true

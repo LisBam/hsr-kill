@@ -30,20 +30,11 @@ func _on_dying_begin(_event: RuleEvent) -> void:
 	if owner == null or not owner.alive or owner.out_of_game or owner.hp > 0 or owner.hand.is_empty() or _hand_contains_survival_card(owner):
 		return
 	announce_activation({"discard_count":owner.hand.size(), "target_hp":RECOVERY_TARGET_HP})
-	host.call("discard_all_hand_cards", owner_player_id, owner_player_id, get_id())
 	# 弃牌产生的失牌技能、装备或选择必须先完整结算，再执行技能原文中的回复步骤。
-	if bool(host.call("has_nested_settlement_barrier")):
-		defer_settlement({"kind":"qiusheng_recover"})
-	else:
-		_recover_to_one()
-
-
-## 在弃牌产生的全部嵌套结算结束后恢复求生的回复步骤。
-func continue_settlement(context: Dictionary) -> bool:
-	if str(context.get("kind", "")) != "qiusheng_recover":
-		return false
-	_recover_to_one()
-	return true
+	run_steps([
+		func(_sequence: RuleStepSequence) -> void: host.discard_all_hand_cards(owner_player_id, owner_player_id, get_id()),
+		func(_sequence: RuleStepSequence) -> void: _recover_to_one(),
+	])
 
 
 ## 将仍存活的技能持有者精确回复至1点；等待期间已经被其他效果救起时不会降低其体力。

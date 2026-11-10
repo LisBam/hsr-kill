@@ -133,14 +133,25 @@ func _execute_gift(card_uid: int, target_id: int) -> bool:
 	if selected_card.zone == "equipment" and target_id != owner_player_id:
 		return false
 	# 普通手牌在移动前公开展示；装备区本就属于公开信息，无需伪造展示事件。
-	if selected_card.zone == "hand" and host.call("reveal_hand_card", owner_player_id, card_uid, get_id()) == null:
-		return false
-	if not bool(host.call("transfer_hand_or_self_equipment_card_as_until_next_turn_end", owner_player_id, target_id, card_uid, WINE_DEFINITION_ID, get_id())):
-		return false
-	_used_this_play_phase = true
-	announce_activation({"card_uid":card_uid, "target_id":target_id, "view_as_definition_id":WINE_DEFINITION_ID})
-	observe_identity_behavior([target_id], {"target_result":AI_TARGET_RESULT, "gain":true})
-	return true
+	# 展示前锁定来源种类；等待期间只使用UID查回，不持有牌实体。
+	var requires_reveal: bool = selected_card.zone == "hand"
+	# 展示是否有效；失败时后续不移动也不消耗次数。
+	var reveal_succeeded: Array[bool] = [true]
+	# 完成结果槽；只有完整交牌结束后才消费本阶段次数。
+	return run_steps([
+		func(_sequence: RuleStepSequence) -> void:
+			if requires_reveal:
+				reveal_succeeded[0] = host.reveal_hand_card(owner_player_id, card_uid, get_id()) != null,
+		func(_sequence: RuleStepSequence) -> void:
+			if reveal_succeeded[0]:
+				_sequence.effect_result = host.transfer_hand_or_self_equipment_card_as_until_next_turn_end(owner_player_id, target_id, card_uid, WINE_DEFINITION_ID, get_id()),
+		func(_sequence: RuleStepSequence) -> void:
+			if _sequence.effect_result == null or not _sequence.effect_result.completed or not bool(_sequence.effect_result.result.get("success", false)):
+				return
+			_used_this_play_phase = true
+			announce_activation({"card_uid":card_uid, "target_id":target_id, "view_as_definition_id":WINE_DEFINITION_ID})
+			observe_identity_behavior([target_id], {"target_result":AI_TARGET_RESULT, "gain":true}),
+	]) >= 0
 
 
 ## 返回技能持有者当前全部黑色普通手牌与装备候选；花色从实体快照读取，不依赖牌名。

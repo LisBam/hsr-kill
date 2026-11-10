@@ -65,20 +65,20 @@ func _link_jiahu_target(sequence: RuleStepSequence, response: ChoiceResponse = n
 		return
 	sequence.context["target_id"] = target_id
 	sequence.context["target_character_generation"] = host.state.get_player(target_id).character_generation
-	if not bool(host.call("set_player_linked", target_id, true, owner_player_id, get_id())):
-		sequence.finish()
-		return
-	announce_activation({"target_id":target_id})
+	sequence.effect_result = host.call("set_player_linked", target_id, true, owner_player_id, get_id())
 
 
 ## 第三步提供护盾；目标换将或离场后不向同座位的新角色泄漏旧效果。
 func _grant_jiahu_shield(sequence: RuleStepSequence) -> void:
+	if sequence.effect_result == null or not sequence.effect_result.success:
+		return
 	# 已确认目标ID；由横置步骤写入，不重新选择或重复发动技能。
 	var target_id: int = int(sequence.context.get("target_id", -1))
 	# 当前目标；体力存活和武将代次校验保证异步结果仍属于同一角色。
 	var target: PlayerState = host.state.get_player(target_id)
 	if target == null or not target.alive or target.out_of_game or target.character_generation != int(sequence.context.get("target_character_generation", -1)):
 		return
+	announce_activation({"target_id":target_id})
 	get_skill_player(target_id).shield(SHIELD_AMOUNT, get_owner_skill_player())
 	observe_identity_behavior([target_id], {"target_result":1.0})
 

@@ -57,14 +57,6 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 	return true
 
 
-## 在嵌套冥谶等触发选择完成后继续录事的摸牌步骤。
-func continue_settlement(context: Dictionary) -> bool:
-	if str(context.get("kind", "")) != "lushi_draw":
-		return false
-	host.call("draw", owner_player_id, DRAW_COUNT)
-	return true
-
-
 ## 弃置合法牌组并摸牌；装备先于手牌支付，使“失去最后手牌”在本次两牌费用完整移动后触发。
 func _execute_discard_and_draw(selected_uids: Array[int]) -> bool:
 	if not _pair_is_currently_valid(selected_uids):
@@ -80,14 +72,15 @@ func _execute_discard_and_draw(selected_uids: Array[int]) -> bool:
 		var right_is_hand: bool = owner != null and owner.find_hand_card(right_uid) != null
 		return int(left_is_hand) < int(right_is_hand)
 	)
-	if int(host.call("discard_selected_hand_equipment", owner_player_id, ordered_uids)) != 2:
-		return false
-	announce_activation({"card_uids":selected_uids.duplicate()})
-	# 失去最后手牌可能创建冥谶目标选择；录事的“然后摸一张牌”必须等待嵌套技能完整结算。
-	if host.has_pending_card_choice():
-		defer_settlement({"kind":"lushi_draw"})
-	else:
-		host.call("draw", owner_player_id, DRAW_COUNT)
+	run_steps([
+		func(sequence: RuleStepSequence) -> void:
+			sequence.effect_result = host.call("begin_discard_cards", owner_player_id, ordered_uids, ["hand", "equipment"] as Array[String], owner_player_id, get_id()),
+		func(sequence: RuleStepSequence) -> void:
+			if sequence.effect_result == null or sequence.effect_result.selected_count != ordered_uids.size():
+				return
+			announce_activation({"card_uids":selected_uids.duplicate()})
+			host.call("draw", owner_player_id, DRAW_COUNT)
+	])
 	return true
 
 

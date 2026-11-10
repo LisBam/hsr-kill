@@ -36,9 +36,12 @@ func _on_owner_card_targeted(event: RuleEvent) -> void:
 	if target == null or target.chained:
 		return
 	announce_activation({"target_id":target_id, "card_uid":int(event.data.get("card_uid", -1))})
-	host.call("set_player_linked", target_id, true, owner_player_id, get_id())
-	if target_id == owner_player_id:
-		host.call("draw", owner_player_id, 1)
+	run_steps([
+		func(_sequence: RuleStepSequence) -> void: host.call("set_player_linked", target_id, true, owner_player_id, get_id()),
+		func(_sequence: RuleStepSequence) -> void:
+			if target_id == owner_player_id:
+				host.call("draw", owner_player_id, 1),
+	])
 
 
 ## 修正持有者使用牌指定唯一竖置目标的评分；横置敌方有利，横置友方不利，自身目标额外计入摸1张牌。

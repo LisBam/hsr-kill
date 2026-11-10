@@ -73,8 +73,11 @@ func _begin_judgment(context: Dictionary) -> void:
 		"favorable_result_player_values":{str(owner_player_id):AI_FAVORABLE_RESULT_VALUE, str(target_id):-AI_FAVORABLE_RESULT_VALUE},
 	}
 	# 最终判定牌；没有判定前交互时同步返回，有【戏法】时由 continue_judgment 恢复。
-	var judgment_card: CardInstance = host.call("request_judgment", owner_player_id, "【剑势】", continuation, judgment_ai_context) as CardInstance
-	if not bool(host.call("has_pending_judgment_request")):
+	# 本次判定的结果对象；嵌套时不使用全局是否存在判定来判断自己的完成状态。
+	var judgment_resolution: RefCounted = host.call("begin_judgment_resolution", owner_player_id, "【剑势】", continuation, judgment_ai_context) as RefCounted
+	# 保留原结果变量；同步结束直接应用，异步结束仍由continue_judgment接收。
+	var judgment_card: CardInstance = judgment_resolution.result as CardInstance
+	if judgment_resolution.completed:
 		_apply_judgment_result(parent_card_uid, target_id, judgment_card)
 
 

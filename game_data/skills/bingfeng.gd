@@ -92,8 +92,10 @@ func _continue_option(context: Dictionary, response: ChoiceResponse) -> bool:
 	announce_activation({"target_id":target_id, "card_uid":int(context.get("card_uid", -1)), "option_id":option_id})
 	if option_id == STRAIGHTEN_OPTION_ID:
 		# 目标已竖置时统一设置端口会返回false；该分支按通用规则跳过，不阻断后置无效。
-		host.call("set_player_linked", target_id, false, owner_player_id, get_id())
-		_finish_effect(context)
+		run_steps([
+			func(_sequence: RuleStepSequence) -> void: host.call("set_player_linked", target_id, false, owner_player_id, get_id()),
+			func(_sequence: RuleStepSequence) -> void: _finish_effect(context),
+		])
 		return true
 	# 目标当前手牌候选；三月七作为选择者只能看见牌背，但稳定UID可完成权威弃置。
 	var candidates: Array[Dictionary] = host.call("get_hand_candidates", owner_player_id, target_id) as Array[Dictionary]

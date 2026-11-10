@@ -21,8 +21,6 @@ const JOY_COMPLETION_KIND: String = "yaota_joy_complete"
 ## 额外出牌阶段完成回调的种类。
 const EXTRA_PHASE_COMPLETION_KIND: String = "yaota_extra_play_complete"
 
-## 费用结算后“分流到欢愉技或额外出牌阶段”这一延后步骤的稳定标识；供 continue_settlement 识别。
-const DISPATCH_SETTLEMENT_KIND: String = "yaota_dispatch_effect"
 
 ## AI：队友手牌数达到该值时取得最高目标优先级；固定8，来自需求给出的AI口径。
 const AI_ALLY_MANY_CARDS_THRESHOLD: int = 8
@@ -105,27 +103,15 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 		return true
 	# 先锁定额度再支付；弃置失败时回滚，保证“支付成功才算发动”。
 	_used_suits[cost_card.suit] = true
-	announce_activation({"card_uid":cost_card.uid, "suit":cost_card.suit, "target_id":target_id})
 	# 费用UID数组；弃置走统一端口，装备离开、保护规则与动画逻辑全部沿用既有实现。
 	var cost_uids: Array[int] = [cost_card.uid]
-	if int(host.call("discard_selected_hand_equipment", owner_player_id, cost_uids)) <= 0:
-		_used_suits.erase(cost_card.suit)
-		return true
-	# 分流步骤；本组合选择窗口此时仍在等待响应，控制器会拒绝“已有待响应选择”期间创建的新请求，
-	# 而目标欢愉技一演出就要创建自己的目标窗口，因此必须先延后到统一结算管线清空后再分流。
-	var dispatch_context: Dictionary = {"kind":DISPATCH_SETTLEMENT_KIND, "target_id":target_id}
-	if host.has_pending_card_choice():
-		defer_settlement(dispatch_context)
-		return true
-	_dispatch_yaota_effect(target_id)
-	return true
-
-
-## 恢复弃置结算产生的嵌套选择；结算管线清空后按目标是否有可执行欢愉技分流。
-func continue_settlement(context: Dictionary) -> bool:
-	if str(context.get("kind", "")) != DISPATCH_SETTLEMENT_KIND:
-		return false
-	_dispatch_yaota_effect(int(context.get("target_id", -1)))
+	host.call("discard_selected_hand_equipment", owner_player_id, cost_uids, func(discarded_count: int) -> void:
+		if discarded_count <= 0:
+			_used_suits.erase(cost_card.suit)
+			return
+		announce_activation({"card_uid":cost_card.uid, "suit":cost_card.suit, "target_id":target_id})
+		_dispatch_yaota_effect(target_id)
+	)
 	return true
 
 

@@ -84,8 +84,11 @@ func resolve_delayed_judgment(match_host: Object, player_id: int, card: CardInst
 	# 判定 AI 上下文与本牌判定结论使用同一份花色常量，改花色时两处必然同步。
 	var judgment_ai_context: Dictionary = {"favorable_condition":{"not":{"suits":[REQUIRED_JUDGMENT_SUIT]}}, "unfavorable_condition":{"suits":[REQUIRED_JUDGMENT_SUIT]}, "favorable_result_player_values":{str(player_id):AI_TARGET_SAFE_RESULT_VALUE}}
 	# 【言灵】判定牌；判定前存在选择时由 continue_judgment 恢复，不提前移动原延时牌。
-	var judgment_card: CardInstance = match_host.request_judgment(player_id, "【言灵】", continuation, judgment_ai_context)
-	if match_host.has_pending_judgment_request():
+	# 本次判定结果对象；外层判定仍活动时也只查询自己的完成状态。
+	var judgment_resolution: RefCounted = match_host.begin_judgment_resolution(player_id, "【言灵】", continuation, judgment_ai_context)
+	# 保留原判定牌变量；只有本次结果完成后才继续应用。
+	var judgment_card: CardInstance = judgment_resolution.result as CardInstance
+	if not judgment_resolution.completed:
 		return
 	_apply_delayed_result(match_host, player_id, card, judgment_card)
 

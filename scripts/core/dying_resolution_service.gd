@@ -83,7 +83,7 @@ func _emit_compat_begin(sequence: RuleStepSequence) -> void:
 ## 只在所有开始通知及其子技能结束后开放原单轮求桃入口。
 func _begin_rescue(sequence: RuleStepSequence) -> void:
 	if _get_dying_target(sequence) != null:
-		_host._resolve_dying(int(sequence.context.target_id), int(sequence.context.killer_id))
+		rescue(int(sequence.context.target_id), int(sequence.context.killer_id))
 
 
 ## 先提交脱离濒死事实，再逐窗口报告；重复完成调用不会重复发布After或执行伤害尾部。
@@ -188,8 +188,14 @@ func _consume_rescue(sequence: RuleStepSequence) -> void:
 	if selected_uids.is_empty():
 		return
 	var response_patterns: Array[String] = _host._string_array(sequence.context.response_context.get("response_patterns", []))
-	var response_card: CardInstance = _host._consume_response_card_uid_patterns(rescuer.player_id, selected_uids[0], response_patterns, _host._int_array(sequence.context.get("material_uids", [])), str(sequence.context.get("response_skill_id", "")), sequence.context.response_context)
-	sequence.context.response_card = _host._serialize_optional_response_card(response_card)
+	# 消费结果对象；子响应所有时机结束后，插入的读取步骤才写入救援牌槽。
+	var response_resolution: RefCounted = _host.begin_response_resolution(rescuer.player_id, selected_uids[0], response_patterns, _host._int_array(sequence.context.get("material_uids", [])), str(sequence.context.get("response_skill_id", "")), sequence.context.response_context)
+	sequence.insert_steps([_read_rescue_response.bind(response_resolution)])
+
+
+## 响应前置取消与仍在等待是不同状态；只在子内容已完成时读取其最终结果。
+func _read_rescue_response(sequence: RuleStepSequence, response_resolution: RefCounted) -> void:
+	sequence.context.response_card = _host._serialize_optional_response_card(response_resolution.result)
 
 
 ## 失牌子内容完成后应用一次救援；回复的Before和After仍是本步骤的子内容。

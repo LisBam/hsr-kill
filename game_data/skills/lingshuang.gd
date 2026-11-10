@@ -79,32 +79,42 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 	if owner == null:
 		return true
 	var was_face_down: bool = owner.face_down
-	if not bool(host.call("turn_over_player", owner_player_id, owner_player_id, get_id())):
-		return true
-	# 翻转后的朝向；由端口切换保证与翻转前相反。
-	var is_face_down_now: bool = not was_face_down
-	# 目标与牌信息；都在询问时固定，避免结算期间被其他技能改动。
-	var target_id: int = int(context.get("target_id", -1))
-	var card_uid: int = int(context.get("card_uid", -1))
-	var card_definition_id: String = str(context.get("card_definition_id", ""))
-	# 附加效果只在“本次由正面翻至背面”时成立，与原文条件逐字对应。
-	var discarded_count: int = 0
-	var limit_exempted: bool = false
-	if is_face_down_now:
-		discarded_count = _discard_target_hand_cards(target_id)
-		limit_exempted = _exempt_card_use_limit(card_uid, card_definition_id)
-	announce_activation({"target_id":target_id, "face_down":is_face_down_now, "discarded_count":discarded_count, "limit_exempted":limit_exempted})
+	run_steps([
+		func(sequence: RuleStepSequence) -> void: sequence.effect_result = host.call("turn_over_player", owner_player_id, owner_player_id, get_id()),
+		func(sequence: RuleStepSequence) -> void:
+			if sequence.effect_result == null or not sequence.effect_result.success:
+				return
+			# 翻转后的朝向；由端口切换保证与翻转前相反。
+			var is_face_down_now: bool = bool(sequence.effect_result.result.get("face_down", not was_face_down))
+			# 目标与牌信息；都在询问时固定，避免结算期间被其他技能改动。
+			var target_id: int = int(context.get("target_id", -1))
+			var card_uid: int = int(context.get("card_uid", -1))
+			var card_definition_id: String = str(context.get("card_definition_id", ""))
+			# 附加效果只在“本次由正面翻至背面”时成立，与原文条件逐字对应。
+			if is_face_down_now and not bool(sequence.effect_result.result.get("old_face_down", was_face_down)):
+				_discard_target_hand_cards(target_id, func(discarded_count: int) -> void:
+					# 次数豁免在费用及其触发完整结束后生效。
+					var limit_exempted: bool = _exempt_card_use_limit(card_uid, card_definition_id)
+					announce_activation({"target_id":target_id, "face_down":is_face_down_now, "discarded_count":discarded_count, "limit_exempted":limit_exempted})
+				)
+			else:
+				announce_activation({"target_id":target_id, "face_down":false, "discarded_count":0, "limit_exempted":false})
+	])
 	return true
 
 
 ## 弃置目标角色的两张手牌；不足两张时弃置其全部手牌。
 ## 使用他人手牌候选端口，候选经过可见性处理，玩家与AI都只能盲选，与既有盲选技能保持同一口径。
-func _discard_target_hand_cards(target_id: int) -> int:
+func _discard_target_hand_cards(target_id: int, on_complete: Callable = Callable()) -> int:
 	if host == null or target_id < 0:
+		if on_complete.is_valid():
+			on_complete.call(0)
 		return 0
 	# 目标手牌候选；他人手牌以可见性受限的候选形式提供。
 	var candidates: Array[Dictionary] = host.call("get_hand_candidates", owner_player_id, target_id) as Array[Dictionary]
 	if candidates.is_empty():
+		if on_complete.is_valid():
+			on_complete.call(0)
 		return 0
 	# 实际弃置张数；目标手牌不足请求张数时取其全部。
 	var discard_count: int = mini(DISCARD_HAND_COUNT, candidates.size())
@@ -113,8 +123,10 @@ func _discard_target_hand_cards(target_id: int) -> int:
 	for candidate_index: int in range(discard_count):
 		selected_uids.append(int((candidates[candidate_index] as Dictionary).get("uid", -1)))
 	if selected_uids.is_empty():
+		if on_complete.is_valid():
+			on_complete.call(0)
 		return 0
-	return int(host.call("discard_selected_hand_cards", target_id, selected_uids))
+	return int(host.call("discard_selected_hand_cards", target_id, selected_uids, on_complete))
 
 
 ## 令本张【杀】不计入出牌阶段使用限制；同一张牌只豁免一次，重复豁免会额外放宽该牌族的可使用次数。

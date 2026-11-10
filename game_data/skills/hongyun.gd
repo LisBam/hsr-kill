@@ -135,11 +135,16 @@ func continue_joy_performance(context: Dictionary) -> void:
 	if host == null or host.get("state") == null:
 		return
 	# 上限减少实际值；核心端口会夹紧上限，因此这里只依据返回值决定是否记录代价已经支付。
-	var applied_cost: int = int(host.call("change_max_hp", owner_player_id, -MAX_HP_COST, owner_player_id, get_id()))
-	if applied_cost == 0:
-		return
-	# 体力上限端口自身不写对局日志，这里补一条公开记录，使代价在日志与复盘里可见。
-	host.call("add_log", "%s因【鸿运】减少%d点体力上限。" % [host.call("format_player_log_name", owner_player_id), MAX_HP_COST])
+	run_steps([
+		func(sequence: RuleStepSequence) -> void: sequence.effect_result = host.call("change_max_hp", owner_player_id, -MAX_HP_COST, owner_player_id, get_id()),
+		func(sequence: RuleStepSequence) -> void:
+			# 上限减少实际值；只有完整成功后才记录费用日志。
+			var applied_cost: int = sequence.effect_result.amount if sequence.effect_result != null else 0
+			if applied_cost == 0:
+				return
+			# 体力上限端口自身不写对局日志，这里补一条公开记录，使代价在日志与复盘里可见。
+			host.call("add_log", "%s因【鸿运】减少%d点体力上限。" % [host.call("format_player_log_name", owner_player_id), absi(applied_cost)])
+	])
 
 
 ## 评估是否发动鸿运；按双方欢愉技数量差与自身体力缺口决定，并拒绝上限不足或敌方占优的局面。

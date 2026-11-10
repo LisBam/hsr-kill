@@ -63,6 +63,14 @@ func has_pending() -> bool:
 	return not _continuations.is_empty()
 
 
+## 查询已登记的生命周期后继；只观察现有内容，不建立第二份模式等待标志。
+func has_type(continuation_type: String) -> bool:
+	for continuation: Dictionary in _continuations:
+		if str(continuation.get("continuation_type", "")) == continuation_type:
+			return true
+	return false
+
+
 ## 返回等待续接数量；测试、诊断和流程保护可据此判断是否已经完全排空。
 func size() -> int:
 	return _continuations.size()

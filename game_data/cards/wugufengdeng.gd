@@ -33,133 +33,121 @@ func _init() -> void:
 
 ## 执行【五谷丰登】效果；状态修改统一通过 CardEffectResolver 暴露的规则端口完成。
 func resolve(resolver: Object, card: CardInstance, actor_id: int, target_ids: Array[int]) -> String:
-	# 初始展示牌；数量等于结算开始时的目标数，全部进入公共处理区。
+	# 亮牌是公共实体登记，不包含玩家失去或获得；后续选择、无懈、获得和回收由同一规则内容持有。
 	var revealed_cards: Array[CardInstance] = resolver.host.reveal_top_cards(target_ids.size())
-	# 展示牌 UID；异步上下文只保存可序列化稳定 ID。
+	# 原展示实体身份；选择与结算中只保存稳定UID。
 	var revealed_uids: Array[int] = []
-	# 固定公共展示牌位；完整保留最初亮出的牌面与后续领取者，牌被取得后不会从界面布局中删除。
+	# 固定公共展示牌面；实际取得后仅更新领取者，不删除历史牌位。
 	var harvest_display_slots: Array[Dictionary] = []
 	for revealed_card: CardInstance in revealed_cards:
 		revealed_uids.append(revealed_card.uid)
-		harvest_display_slots.append({
-			"uid":revealed_card.uid,
-			"card_data":revealed_card.to_dict(),
-			"taken_by_player_id":-1,
-		})
-	# 五谷结算上下文；target_index 指向下一名应获得展示牌的角色。
-	var context: Dictionary = {"kind":"harvest", "parent_card_uid":card.uid, "actor_id":actor_id, "target_ids":target_ids.duplicate(), "target_index":0, "revealed_uids":revealed_uids, "harvest_display_slots":harvest_display_slots}
-	# 首名目标；公共选牌框在任何无懈询问前立即出现，空目标时使用-1作为无操作者占位值。
-	var first_target_id: int = int(target_ids[0]) if not target_ids.is_empty() else -1
-	_publish_harvest_display(resolver, context, first_target_id)
-	_process_choice_queue(resolver, context, false)
-	return resolver.default_destination()
+		harvest_display_slots.append({"uid":revealed_card.uid, "card_data":revealed_card.to_dict(), "taken_by_player_id":-1})
+	# 原目标顺序与展示快照；下一目标只在上一目标完整获得After后推进。
+	var context: Dictionary = {"sequence_kind":"harvest", "parent_card_uid":card.uid, "actor_id":actor_id, "target_ids":target_ids.duplicate(), "target_index":0, "revealed_uids":revealed_uids, "harvest_display_slots":harvest_display_slots}
+	_publish_harvest_display(resolver, context, int(target_ids[0]) if not target_ids.is_empty() else -1)
+	resolver.host.run_rule_sequence([_next_target.bind(resolver)] as Array[Callable], context)
+	return "pending"
 
 
-## 继续展示牌选择队列；人类请求暂停时保留全部剩余目标和展示牌 UID。
-func _process_choice_queue(resolver: Object, context: Dictionary, deferred_resolution: bool) -> void:
-	# 剩余展示牌 UID；每名成功选择者取得一张并从数组移除。
-	var revealed_uids: Array[int] = []
-	for uid_variant: Variant in context.get("revealed_uids", []) as Array:
-		revealed_uids.append(int(uid_variant))
-	# 初始目标数组；顺序由使用牌时的规则层确定。
-	var target_ids: Array[int] = []
-	for target_variant: Variant in context.get("target_ids", []) as Array:
-		target_ids.append(int(target_variant))
-	# 下一目标索引；恢复请求时从已选择角色之后继续。
-	var target_index: int = int(context.get("target_index", 0))
-	while target_index < target_ids.size() and not revealed_uids.is_empty() and not resolver.state.game_over:
-		# 当前获得者 ID；每名角色从全部剩余展示牌中自主选择。
-		var target_id: int = target_ids[target_index]
-		_publish_harvest_display(resolver, context, target_id)
-		# 当前目标无懈结果；专用恢复会把结果写回相同目标索引。
-		var target_negated: bool = false
-		if int(context.get("negation_resolved_target_index", -1)) == target_index:
-			target_negated = bool(context.get("negation_resolved_result", false))
-			context.erase("negation_resolved_target_index")
-			context.erase("negation_resolved_result")
-		else:
-			# 五谷无懈恢复上下文；抵消只跳过当前角色的选牌资格。
-			var negation_context: Dictionary = context.duplicate(true)
-			negation_context["continuation_kind"] = "harvest_negation"
-			negation_context["target_index"] = target_index
-			negation_context["revealed_uids"] = revealed_uids.duplicate()
-			target_negated = resolver.host.resolve_trick_negation(int(context.get("actor_id", -1)), target_id, "wugu", negation_context)
-			if resolver.host.has_pending_card_choice():
-				return
-		if target_negated:
-			target_index += 1
-			continue
-		# 当前展示候选；全部公开且仍位于公共处理区。
-		var candidates: Array[Dictionary] = resolver.host.get_processing_candidates(revealed_uids)
-		# 当前请求上下文；提交后需要先交牌，再推进到下一名目标。
-		var request_context: Dictionary = context.duplicate(true)
-		request_context["kind"] = "harvest"
-		request_context["target_index"] = target_index
-		request_context["revealed_uids"] = revealed_uids.duplicate()
-		request_context["deferred_resolution"] = deferred_resolution
-		# 当前角色选择结果；五谷要求且只允许选择1张剩余展示牌。
-		var selected_uids: Array[int] = resolver.host.request_card_choice(target_id, "五谷丰登", "请选择一张展示牌获得", candidates, 1, 1, false, request_context)
-		if resolver.host.has_pending_card_choice():
-			return
-		if not selected_uids.is_empty():
-			# 被选展示牌；同步选择时仍需确认实体没有离开处理区。
-			var chosen_card: CardInstance = resolver.find_processing_card(selected_uids[0])
-			if chosen_card != null:
-				resolver.host.give_revealed_card(target_id, chosen_card)
-				_mark_harvest_slot_taken(context, selected_uids[0], target_id)
-				revealed_uids.erase(selected_uids[0])
-				_publish_harvest_display(resolver, context, target_id)
-		target_index += 1
-	if not revealed_uids.is_empty():
-		resolver.host.emit_rule_timing("wuguRemained", int(context.get("actor_id", -1)), int(context.get("actor_id", -1)), -1, {"parent_card_uid":int(context.get("parent_card_uid", -1)), "remaining_card_uids":revealed_uids.duplicate()})
-	for remaining_uid: int in revealed_uids:
-		# 未被选择的展示牌；仍在处理区时逐张进入弃牌堆。
-		var remaining_card: CardInstance = resolver.find_processing_card(remaining_uid)
-		if remaining_card != null:
-			resolver.host.discard_revealed_card(remaining_card)
-	if deferred_resolution and not resolver.state.game_over:
-		resolver.host.finish_processing_card(int(context.get("parent_card_uid", -1)))
+## 每次只展开一名原目标；已离开处理区的展示实体不再作为候选，不补充新牌。
+func _next_target(sequence: RuleStepSequence, resolver: Object) -> void:
+	# 当前仍可分配的原展示身份；嵌套效果取得的牌会从本轮候选中自然消失。
+	var remaining_uids: Array[int] = []
+	for card_uid: int in sequence.context.revealed_uids:
+		if resolver.find_processing_card(card_uid) != null:
+			remaining_uids.append(card_uid)
+	sequence.context["revealed_uids"] = remaining_uids
+	# 原目标游标；无效目标只跳过一次，不按实时全场角色重建目标集合。
+	var target_index: int = int(sequence.context.target_index)
+	if target_index >= (sequence.context.target_ids as Array).size() or remaining_uids.is_empty():
+		sequence.insert_steps([_remaining_timing.bind(resolver), _discard_remaining.bind(resolver), _finish_harvest.bind(resolver)])
+		return
+	sequence.context["target_index"] = target_index + 1
+	sequence.context["current_target_id"] = int(sequence.context.target_ids[target_index])
+	# 原当前目标代次；无懈或获得前置中换将后不向新角色发放收益。
+	var target: PlayerState = resolver.state.get_player(int(sequence.context.current_target_id))
+	if target == null or not target.alive or target.out_of_game:
+		sequence.insert_steps([_next_target.bind(resolver)])
+		return
+	sequence.context["target_generation"] = target.character_generation
+	_publish_harvest_display(resolver, sequence.context, target.player_id)
+	sequence.insert_steps([_negate_target.bind(resolver), _choose_card.bind(resolver), _give_card.bind(resolver), _record_gain.bind(resolver), _next_target.bind(resolver)])
+
+
+## 通用无懈结果槽只写最终奇偶；所有响应After完成后才进入展示牌选择。
+func _negate_target(sequence: RuleStepSequence, resolver: Object) -> void:
+	sequence.context["negated"] = resolver.host.resolve_trick_negation(int(sequence.context.actor_id), int(sequence.context.current_target_id), "wugu", {"parent_card_uid":int(sequence.context.parent_card_uid), "rule_negation_sequence_id":sequence.sequence_id})
+
+
+## 当前角色仍为原武将且未被无懈时请求一张剩余牌；统一选择结果直接归属本序列。
+func _choose_card(sequence: RuleStepSequence, resolver: Object) -> void:
+	sequence.choice_response = null
+	if bool(sequence.context.get("negated", false)):
+		return
+	# 原接收者；代次或生存资格变化时跳过本次收益。
+	var target: PlayerState = resolver.state.get_player(int(sequence.context.current_target_id))
+	if target == null or not target.alive or target.out_of_game or target.character_generation != int(sequence.context.target_generation):
+		return
+	# 原展示牌候选；处理区中已不存在的实体不进入请求。
+	var candidates: Array[Dictionary] = resolver.host.get_processing_candidates(sequence.context.revealed_uids as Array[int])
+	if candidates.is_empty():
+		return
+	# 原生统一选择路由；不再复制continue_choice及After手工续接。
+	var context: Dictionary = {"kind":"harvest", "parent_card_uid":int(sequence.context.parent_card_uid), "rule_sequence_id":sequence.sequence_id, "choice_chooser_id":target.player_id}
+	resolver.host.request_card_choice(target.player_id, "五谷丰登", "请选择一张展示牌获得", candidates, 1, 1, false, context)
+
+
+## 先等待实际获得，再读取结果；取消前置不能提前从展示候选中移除实体。
+func _give_card(sequence: RuleStepSequence, resolver: Object) -> void:
+	sequence.effect_result = null
+	if sequence.choice_response == null or not sequence.choice_response.confirmed or sequence.choice_response.card_ids.size() != 1:
+		return
+	# 原选定实体；其他效果已经移动时本次领取失败。
+	var card: CardInstance = resolver.find_processing_card(int(sequence.choice_response.card_ids[0]))
+	# 原角色；等待选择期间换将时不向新角色发牌。
+	var target: PlayerState = resolver.state.get_player(int(sequence.context.current_target_id))
+	if card != null and target != null and target.character_generation == int(sequence.context.target_generation):
+		sequence.effect_result = resolver.host.give_revealed_card(target.player_id, card)
+
+
+## 真实领取完整结束后更新固定展示牌位；失败且仍在处理区的牌继续供后续角色选择。
+func _record_gain(sequence: RuleStepSequence, resolver: Object) -> void:
+	if sequence.effect_result == null or sequence.effect_result.count <= 0:
+		return
+	# 实际领取身份；After中的再次移动不会抹去本次领取事实。
+	var card_uid: int = int(sequence.effect_result.result.card_uid)
+	_mark_harvest_slot_taken(sequence.context, card_uid, int(sequence.context.current_target_id))
+	(sequence.context.revealed_uids as Array).erase(card_uid)
+	_publish_harvest_display(resolver, sequence.context, int(sequence.context.current_target_id))
+
+
+## 剩余牌通知可以插入选择和移牌；通知完整结束后才回收仍在处理区的原牌。
+func _remaining_timing(sequence: RuleStepSequence, resolver: Object) -> void:
+	if not (sequence.context.revealed_uids as Array).is_empty():
+		sequence.wait_for_timing(resolver.host.emit_sequence_timing(sequence, "wuguRemained", int(sequence.context.actor_id), int(sequence.context.actor_id), -1, {"parent_card_uid":int(sequence.context.parent_card_uid), "remaining_card_uids":(sequence.context.revealed_uids as Array).duplicate()}))
+
+
+## 将未领取原牌逐张接入同一内容；不在同步循环中越过弃牌After。
+func _discard_remaining(sequence: RuleStepSequence, resolver: Object) -> void:
+	# 回收步骤；父序列自动等待每张弃牌及其子效果。
+	var steps: Array[Callable] = []
+	for card_uid: int in sequence.context.revealed_uids:
+		steps.append(_discard_one.bind(resolver, card_uid))
+	sequence.insert_steps(steps)
+
+
+## 公共处理区回收不构成角色弃置费用；已被子效果取得的牌不再处理。
+func _discard_one(_sequence: RuleStepSequence, resolver: Object, card_uid: int) -> void:
+	# 当前原展示实体；只在同步请求内临时使用引用。
+	var card: CardInstance = resolver.find_processing_card(card_uid)
+	if card != null:
+		resolver.host.discard_revealed_card(card)
+
+
+## 所有领取和剩余回收结束后交回父用牌，并清除公共展示。
+func _finish_harvest(sequence: RuleStepSequence, resolver: Object) -> void:
 	resolver.host.clear_public_card_choice_display("harvest")
-
-
-## 恢复一名角色提交的展示牌选择，然后从下一目标继续队列。
-func continue_choice(resolver: Object, context: Dictionary, selected_uids: Array[int]) -> bool:
-	if str(context.get("kind", "")) != "harvest":
-		return false
-	if selected_uids.is_empty():
-		return true
-	# 当前目标数组；target_index 指向本次完成选择的角色。
-	var target_ids: Array = context.get("target_ids", []) as Array
-	# 当前目标索引；提交后递增以进入下一名角色。
-	var target_index: int = int(context.get("target_index", 0))
-	if target_index < 0 or target_index >= target_ids.size():
-		return true
-	# 被选展示牌；仍位于处理区时交入当前角色手牌。
-	var chosen_card: CardInstance = resolver.find_processing_card(selected_uids[0])
-	if chosen_card != null:
-		resolver.host.give_revealed_card(int(target_ids[target_index]), chosen_card)
-		_mark_harvest_slot_taken(context, selected_uids[0], int(target_ids[target_index]))
-		_publish_harvest_display(resolver, context, int(target_ids[target_index]))
-	# 剩余展示牌 UID；移除已获得实体并推进目标游标。
-	var remaining_uids: Array = (context.get("revealed_uids", []) as Array).duplicate()
-	remaining_uids.erase(selected_uids[0])
-	context["revealed_uids"] = remaining_uids
-	context["target_index"] = target_index + 1
-	_process_choice_queue(resolver, context, true)
-	return true
-
-
-## 恢复五谷当前目标的无懈链；抵消结果只作用于当前目标索引。
-func continue_negation(resolver: Object, context: Dictionary, final_negated: bool) -> bool:
-	if str(context.get("continuation_kind", "")) != "harvest_negation":
-		return false
-	# 五谷恢复上下文；保留展示牌 UID、目标数组和目标索引。
-	var harvest_context: Dictionary = context.duplicate(true)
-	harvest_context["kind"] = "harvest"
-	harvest_context["negation_resolved_target_index"] = int(context.get("target_index", 0))
-	harvest_context["negation_resolved_result"] = final_negated
-	_process_choice_queue(resolver, harvest_context, true)
-	return true
+	resolver.host.finish_processing_card(int(sequence.context.parent_card_uid))
 
 
 ## 更新固定展示牌位的领取归属；牌面快照始终保留，只有领取者 ID 会从-1变为实际玩家 ID。

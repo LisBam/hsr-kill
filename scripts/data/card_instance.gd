@@ -82,6 +82,15 @@ var custom_display_name: String = ""
 ## 修改影响：清空该字段会让“找出由某技能创造的牌”类效果失效；它不参与牌效结算，只参与来源识别与展示。
 var minted_skill_id: String = ""
 
+## 持久区域视为前的原实体牌面；空字典表示普通实体，区域离开时按此恢复，不改UID。
+var persistent_view_as: Dictionary = {}
+
+## 同一虚拟装备或延时牌的其他实体材料；由唯一移牌服务维护，不与标准区域数组重复持有。
+var persistent_materials: Array[CardInstance] = []
+
+## 附属材料的主实体UID；默认-1为非附属牌，持久区内部材料不能单独成为普通区域候选。
+var material_parent_uid: int = -1
+
 
 ## 创建实体牌并分配唯一 ID；调用方需提供已校验的配置 ID、花色与点数。
 ## existing_uid 仅供网络快照、回放与规则续接恢复既有实体；默认-1会生成全新递增编号，运行时通常不动态指定。
@@ -129,7 +138,78 @@ static func from_dict(data: Dictionary) -> CardInstance:
 	# 注意 from_dict 是逐键白名单读取：新增字段必须在此显式读取，否则 to_dict 写出的内容会在网络与存档往返中被丢弃。
 	card.custom_display_name = str(data.get("custom_display_name", ""))
 	card.minted_skill_id = str(data.get("minted_skill_id", ""))
+	card.persistent_view_as = (data.get("persistent_view_as", {}) as Dictionary).duplicate(true)
+	card.material_parent_uid = int(data.get("material_parent_uid", -1))
+	# 持久材料按原UID恢复；存档不重造实体，也不把同一份材料另放处理区。
+	for material_data: Dictionary in data.get("persistent_materials", []) as Array:
+		card.persistent_materials.append(CardInstance.from_dict(material_data))
 	return card
+
+
+## 以原首材料承载持久规则牌面；其他材料仍保留各自原牌面，由移牌服务统一附属。
+func set_persistent_view_as(logical_card: CardInstance, persistent_zone: String) -> void:
+	if persistent_view_as.is_empty():
+		persistent_view_as = {"definition_id":definition_id, "suit":suit, "rank":rank, "color_override":color_override, "custom_display_name":custom_display_name, "zone":persistent_zone}
+	definition_id = logical_card.definition_id
+	suit = logical_card.suit
+	rank = logical_card.rank
+	color_override = logical_card.color_override
+	custom_display_name = ""
+
+
+## 离开持久规则区域后恢复原实体牌面，保留一次离区展示；材料UID与铸造来源保持不变。
+func clear_persistent_view_as() -> void:
+	if persistent_view_as.is_empty() or bool(persistent_view_as.get("ephemeral", false)):
+		return
+	last_hand_view_as_definition_id = definition_id
+	last_hand_view_as_suit = suit
+	last_hand_view_as_rank = rank
+	definition_id = str(persistent_view_as.definition_id)
+	suit = str(persistent_view_as.suit)
+	rank = int(persistent_view_as.rank)
+	color_override = str(persistent_view_as.color_override)
+	custom_display_name = str(persistent_view_as.custom_display_name)
+	last_hand_view_as_original_definition_id = definition_id
+	persistent_view_as.clear()
+
+
+## 当前规则对象拥有的原实体UID；无材料持久效果是逻辑状态，不凭空产生可获得的实体牌。
+func get_physical_card_uids() -> Array[int]:
+	# 原物理成员；普通实体和有材料持久牌均包含本UID。
+	var result: Array[int] = []
+	if not bool(persistent_view_as.get("ephemeral", false)):
+		result.append(uid)
+	for material: CardInstance in persistent_materials:
+		result.append(material.uid)
+	return result
+
+
+## 持久牌仅在同类持久区内保留逻辑身份；延时判定的处理区仍属于原延时牌生命周期。
+func retains_persistent_identity(to_zone: String) -> bool:
+	return not persistent_view_as.is_empty() and (to_zone == str(persistent_view_as.get("zone", "")) or (str(persistent_view_as.get("zone", "")) == "judgment" and to_zone == "processing"))
+
+
+## 从只读快照展开离开持久区域后真正得到的实体牌面；AI可复用此纯函数，不创建实例或消耗UID。
+static func get_physical_card_data(data: Dictionary) -> Array[Dictionary]:
+	# 原持久视为牌面；空字典表示普通实体，ephemeral表示没有物理材料。
+	var original: Dictionary = data.get("persistent_view_as", {}) as Dictionary
+	# 原物理成员快照；每个成员只返回一次，返回值与输入不共享可变字典。
+	var result: Array[Dictionary] = []
+	if bool(original.get("ephemeral", false)):
+		return result
+	# 第一份原实体；恢复实体牌面后不能把附属材料重复带入下一层评估。
+	var primary: Dictionary = data.duplicate(true)
+	# 可临时覆盖的牌面键；实体UID与铸造来源不在此列，始终保持原身份。
+	for key: String in ["definition_id", "suit", "rank", "color_override", "custom_display_name"]:
+		if original.has(key):
+			primary[key] = original[key]
+	primary.erase("persistent_view_as")
+	primary.erase("persistent_materials")
+	result.append(primary)
+	# 其余原材料；按绑定顺序输出独立副本，不递归复制主实体。
+	for material: Dictionary in data.get("persistent_materials", []) as Array:
+		result.append(material.duplicate(true))
+	return result
 
 
 ## 返回牌的颜色；优先读取多材料聚合颜色覆写，否则红桃与方块为红色、黑桃与梅花为黑色。
@@ -315,6 +395,9 @@ func to_dict() -> Dictionary:
 		"view_as_rank": view_as_rank,
 		"custom_display_name": custom_display_name,
 		"minted_skill_id": minted_skill_id,
+		"persistent_view_as": persistent_view_as.duplicate(true),
+		"persistent_materials": persistent_materials.map(func(material: CardInstance) -> Dictionary: return material.to_dict()),
+		"material_parent_uid": material_parent_uid,
 	}
 
 

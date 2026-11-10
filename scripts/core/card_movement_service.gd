@@ -22,8 +22,10 @@ func _init(game_state: GameState) -> void:
 
 
 ## 移动单张实体牌并返回 CardMoveEvent；找不到牌或目的区域不合法时返回 null。
-func move_card(card: CardInstance, to_zone: String, target_player_id: int = -1, reason: String = "move", event_id: int = -1, target_slot: String = "", visible_to: Array[int] = []) -> CardMoveEvent:
+func move_card(card: CardInstance, to_zone: String, target_player_id: int = -1, reason: String = "move", event_id: int = -1, target_slot: String = "", visible_to: Array[int] = [], publish: bool = true) -> CardMoveEvent:
 	if state == null or card == null or not _is_valid_zone(to_zone):
+		return null
+	if to_zone == "persistent_material" and (_find_material_parent(target_slot.to_int()) == null or target_slot.to_int() == card.uid):
 		return null
 	if to_zone in ["hand", "equipment", "judgment", "wooden_ox"] and state.get_player(target_player_id) == null:
 		return null
@@ -36,16 +38,36 @@ func move_card(card: CardInstance, to_zone: String, target_player_id: int = -1, 
 	# 例如重复处理 discard_pile -> discard_pile 会被表现层误认为新的弃牌，从而在中央动画落点凭空创建牌面。
 	if source_zone == to_zone and source_owner == target_player_id:
 		return null
+	# 物理成员在恢复逻辑牌面前锁定；复合移牌仍在一个原子块内改变全部原实体。
+	var physical_uids: Array[int] = card.get_physical_card_uids()
+	# 离开持久规则后释放附属材料；延时牌进入判定处理区时继续保持同一绑定。
+	var releasing: bool = not card.persistent_view_as.is_empty() and not card.retains_persistent_identity(to_zone)
+	# 待释放原材料；副本避免实际移牌时修改迭代容器。
+	var released_materials: Array[CardInstance] = []
+	if releasing:
+		released_materials.assign(card.persistent_materials)
+	# 无材料持久效果离区即消失，不能进入手牌、弃牌堆或牌堆成为新实体。
+	var actual_to_zone: String = "void" if releasing and bool(card.persistent_view_as.get("ephemeral", false)) else to_zone
+	if releasing:
+		card.clear_persistent_view_as()
 	_remove_from_zone(card, source_zone, source_owner)
-	_add_to_zone(card, to_zone, target_player_id, target_slot)
-	card.zone = to_zone
-	card.owner_id = target_player_id if to_zone in ["hand", "equipment", "judgment", "wooden_ox"] else -1
-	_update_knowledge(card, to_zone, target_player_id, visible_to)
+	_add_to_zone(card, actual_to_zone, target_player_id, target_slot)
+	card.zone = actual_to_zone
+	card.owner_id = target_player_id if actual_to_zone in ["hand", "equipment", "judgment", "wooden_ox", "persistent_material"] else -1
+	_update_knowledge(card, actual_to_zone, target_player_id, visible_to)
+	# 未释放的材料随主牌保持同一所有者；它们不额外占用装备栏或判定区条目。
+	for material: CardInstance in card.persistent_materials:
+		if not releasing:
+			material.owner_id = card.owner_id
 	# 已结束的视为展示来源；处理区和弃牌堆需要保留本次记录，其余稳定区域不能携带上一轮的一次性视为牌名。
-	if to_zone in ["draw_pile", "hand", "equipment", "judgment", "wooden_ox"]:
+	if actual_to_zone in ["draw_pile", "hand", "equipment", "judgment", "wooden_ox"]:
 		card.clear_hand_view_as_presentation()
 	# 移牌事件；所有字段在追加历史前已经完成权威区域变化。
-	var move: CardMoveEvent = CardMoveEvent.new([card.uid], source_zone, to_zone, source_owner, target_player_id, reason)
+	var move_uids: Array[int] = physical_uids.duplicate()
+	if releasing and not physical_uids.is_empty():
+		move_uids.assign([card.uid])
+	# 当前主实体的真实移动；额外成员另有各自移牌历史，不在本记录中重复计数。
+	var move: CardMoveEvent = CardMoveEvent.new(move_uids, source_zone, actual_to_zone, source_owner, target_player_id if actual_to_zone != "void" else -1, reason)
 	move.move_id = _next_move_id
 	_next_move_id += 1
 	move.event_id = event_id
@@ -61,8 +83,24 @@ func move_card(card: CardInstance, to_zone: String, target_player_id: int = -1, 
 	var move_data: Dictionary = move.to_dict()
 	state.card_move_history.append(move_data)
 	_index_play_discard_move(move_data)
-	card_moved.emit(move_data, card.to_dict())
+	# 附属牌真实移牌记录；发布之前全部实体已经落定，规则订阅者不会看到半拆组状态。
+	var released_moves: Array[CardMoveEvent] = []
+	# 原附属成员的顺序索引；决定其在主材料下方的连续牌堆位次。
+	for material_index: int in range(released_materials.size()):
+		# 牌堆复合落位保持主材料的请求位次，其他成员依原顺序放在它下方，不能反插到主材料之上。
+		var material_slot: String = "@%d" % (maxi(_parse_draw_pile_position(target_slot), 1) + material_index + 1) if to_zone == "draw_pile" else target_slot
+		released_moves.append(move_card(released_materials[material_index], to_zone, target_player_id, reason, event_id, material_slot, visible_to, false))
+	if publish:
+		publish_move(move, card)
+		for index: int in range(released_moves.size()):
+			publish_move(released_moves[index], released_materials[index])
 	return move
+
+
+## 发布已提交的只读增量；复合操作可延后发布，不能以本端口再次修改区域。
+func publish_move(move: CardMoveEvent, card: CardInstance) -> void:
+	if move != null and card != null:
+		card_moved.emit(move.to_dict(), card.to_dict())
 
 
 ## 按 UID 顺序移动多张实体牌；任意一张失败都会停止并返回已经完成的移牌记录。
@@ -159,6 +197,11 @@ func _find_actual_zone(card: CardInstance) -> String:
 		return "discard_pile"
 	if state.processing_area.has(card):
 		return "processing"
+	if card.material_parent_uid >= 0:
+		# 附属实体必须实际属于主牌容器；单独残留的父UID不能授权移动不存在的材料。
+		var parent: CardInstance = _find_material_parent(card.material_parent_uid)
+		if parent != null and parent.persistent_materials.has(card):
+			return "persistent_material"
 	for player: PlayerState in state.players:
 		if player.hand.has(card):
 			return "hand"
@@ -169,7 +212,7 @@ func _find_actual_zone(card: CardInstance) -> String:
 		for slot_variant: Variant in player.equipment.keys():
 			if player.equipment[slot_variant] == card:
 				return "equipment"
-	return card.zone if _is_valid_zone(card.zone) else ""
+	return card.zone if card.zone != "persistent_material" and _is_valid_zone(card.zone) else ""
 
 
 ## 从实际区域数组移除实体牌；未知区域不会静默删除任何其他牌。
@@ -180,6 +223,12 @@ func _remove_from_zone(card: CardInstance, zone: String, owner_id: int) -> void:
 		state.discard_pile.erase(card)
 	elif zone == "processing":
 		state.processing_area.erase(card)
+	elif zone == "persistent_material":
+		# 原主实体；附属牌只从自身绑定容器移除，不扫描并删除其他角色区域。
+		var parent: CardInstance = _find_material_parent(card.material_parent_uid)
+		if parent != null:
+			parent.persistent_materials.erase(card)
+		card.material_parent_uid = -1
 	else:
 		var owner: PlayerState = state.get_player(owner_id)
 		if owner == null:
@@ -215,6 +264,12 @@ func _add_to_zone(card: CardInstance, zone: String, owner_id: int, target_slot: 
 		state.discard_pile.append(card)
 	elif zone == "processing":
 		state.processing_area.append(card)
+	elif zone == "persistent_material":
+		# 内部材料归属由主实体UID指定；调用者必须在原子提交前验证该主实体已登记。
+		var parent: CardInstance = _find_material_parent(target_slot.to_int())
+		if parent != null and parent != card:
+			parent.persistent_materials.append(card)
+			card.material_parent_uid = parent.uid
 	else:
 		var owner: PlayerState = state.get_player(owner_id)
 		if owner == null:
@@ -325,4 +380,16 @@ func _update_knowledge(card: CardInstance, zone: String, target_player_id: int, 
 
 ## 校验所有标准区域名称；void 作为移出对局的回放区域保留但不写入当前状态数组。
 func _is_valid_zone(zone: String) -> bool:
-	return zone in ["draw_pile", "hand", "equipment", "judgment", "processing", "wooden_ox", "discard_pile", "void"]
+	return zone in ["draw_pile", "hand", "equipment", "judgment", "processing", "wooden_ox", "persistent_material", "discard_pile", "void"]
+
+
+## 定位主实体；仅扫描能够合法持有持久绑定的标准区域，不保存独立跨局索引。
+func _find_material_parent(card_uid: int) -> CardInstance:
+	for card: CardInstance in state.processing_area + state.draw_pile + state.discard_pile:
+		if card.uid == card_uid:
+			return card
+	for player: PlayerState in state.players:
+		for card: CardInstance in player.equipment.values() + player.judgment_area + player.hand + player.wooden_ox_storage:
+			if card.uid == card_uid:
+				return card
+	return null

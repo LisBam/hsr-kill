@@ -56,85 +56,98 @@ func _init() -> void:
 
 ## 执行【火攻】效果；状态修改统一通过 CardEffectResolver 暴露的规则端口完成。
 func resolve(resolver: Object, card: CardInstance, actor_id: int, target_ids: Array[int]) -> String:
-	# 本次逻辑牌的扩展存储；视为使用【火攻】的技能可借此声明“命中即可换回的联动奖励”。
-	# 实体火攻没有扩展存储，读到空字典后全部行为与原先完全一致。
-	var stored_storage: Variant = resolver.host.call("get_card_virtual_storage", card.uid)
-	# 扩展存储副本；端口返回非字典时退回空字典，保证任何异常都不会影响正常牌效。
-	var virtual_storage: Dictionary = stored_storage if stored_storage is Dictionary else {}
+	# 本次逻辑牌的扩展存储；自伤联动奖励只参与AI评分，不改变牌效数值。
+	var virtual_storage: Dictionary = resolver.host.get_card_virtual_storage(card.uid)
 	for target_id: int in target_ids:
 		if resolver.should_skip_trick_target(card, actor_id, target_id):
 			continue
-		resolver.host.emit_rule_timing("huogongBegin", actor_id, actor_id, target_id, {"parent_card_uid":card.uid, "card_id":card.definition_id})
-		_request_shown_card(resolver, card.uid, actor_id, target_id, virtual_storage)
-		if resolver.host.has_pending_card_choice():
-			return "pending"
+		# 原使用者；展示和费用等待之后仍须是同一武将。
+		var actor: PlayerState = resolver.state.get_player(actor_id)
+		# 原目标；换将后不向新武将继续展示、扣费或伤害。
+		var target: PlayerState = resolver.state.get_player(target_id)
+		if actor == null or target == null:
+			continue
+		# 单目标完整内容；原生父牌等待展示、费用、伤害和其After后再收尾目标。
+		var data: Dictionary = {"sequence_kind":"fire_attack", "parent_card_uid":card.uid, "actor_id":actor_id, "target_id":target_id, "actor_generation":actor.character_generation, "target_generation":target.character_generation, "card_definition_id":get_id(), VIRTUAL_STORAGE_HIT_REWARD_KEY:float(virtual_storage.get(VIRTUAL_STORAGE_HIT_REWARD_KEY, 0.0))}
+		resolver.host.run_rule_sequence([_begin_fire_attack.bind(resolver), _choose_shown_card.bind(resolver), _show_and_choose_cost.bind(resolver), _pay_selected_cost.bind(resolver), _finish_fire_attack.bind(resolver)] as Array[Callable], data)
+		return "pending"
 	return resolver.default_destination()
 
 
-## 请求目标展示一张普通手牌；选择恢复上下文始终保留父牌 UID、使用者和目标。
-## virtual_storage 由使用本牌的技能声明，其中的命中联动奖励会原样带到弃牌阶段供自伤收益判断使用。
-func _request_shown_card(resolver: Object, parent_card_uid: int, actor_id: int, target_id: int, virtual_storage: Dictionary) -> void:
-	# 目标手牌候选；目标本人查看时全部正面显示。
-	var candidates: Array[Dictionary] = resolver.host.get_hand_candidates(target_id, target_id)
-	# 展示阶段上下文；异步恢复后继续创建同花色弃牌请求。
-	# card_definition_id：让统一选择评分能按稳定ID找到本牌定义，从而调用本牌的专属选牌评分。
-	var context: Dictionary = {
-		"kind":SHOW_CHOICE_KIND,
-		"parent_card_uid":parent_card_uid,
-		"actor_id":actor_id,
-		"target_id":target_id,
-		"card_definition_id":get_id(),
-		VIRTUAL_STORAGE_HIT_REWARD_KEY:float(virtual_storage.get(VIRTUAL_STORAGE_HIT_REWARD_KEY, 0.0)),
-	}
-	# 目标选择结果；火攻要求且只允许展示一张手牌。
-	var selected_uids: Array[int] = resolver.host.request_card_choice(target_id, "火攻展示", "请选择一张手牌展示", candidates, 1, 1, false, context)
-	if resolver.host.has_pending_card_choice() or selected_uids.is_empty():
+## 独立开始时机也允许插入子效果；下一步读取最终取消状态。
+func _begin_fire_attack(sequence: RuleStepSequence, resolver: Object) -> void:
+	sequence.wait_for_timing(resolver.host.emit_sequence_timing(sequence, "huogongBegin", int(sequence.context.actor_id), int(sequence.context.actor_id), int(sequence.context.target_id), {"parent_card_uid":int(sequence.context.parent_card_uid), "card_id":get_id()}))
+
+
+## 原使用者与目标均保持有效；本判断只读，不创建选择或消费费用。
+func _is_original_fire_attack_valid(sequence: RuleStepSequence, resolver: Object) -> bool:
+	# 原使用者的当前状态；死亡、离场或换将后不继续本人决策。
+	var actor: PlayerState = resolver.state.get_player(int(sequence.context.actor_id))
+	# 原目标的当前状态；同座位新武将不继承旧牌效。
+	var target: PlayerState = resolver.state.get_player(int(sequence.context.target_id))
+	return actor != null and target != null and actor.alive and target.alive and not actor.out_of_game and not target.out_of_game and actor.character_generation == int(sequence.context.actor_generation) and target.character_generation == int(sequence.context.target_generation)
+
+
+## 展示选择结果直接归本序列；没有手牌或开始被取消时仍进入唯一目标收尾。
+func _choose_shown_card(sequence: RuleStepSequence, resolver: Object) -> void:
+	sequence.choice_response = null
+	if not _is_original_fire_attack_valid(sequence, resolver) or (sequence.waiting_event != null and (sequence.waiting_event.cancelled or sequence.waiting_event.neutralized)):
 		return
-	_apply_shown_card(resolver, context, selected_uids[0])
+	# 原目标普通手牌；展示不移动实体。
+	var candidates: Array[Dictionary] = resolver.host.get_hand_candidates(int(sequence.context.target_id), int(sequence.context.target_id))
+	if candidates.is_empty():
+		return
+	# 原选择语义与结果归属；保留牌效AI依赖的奖励与稳定ID。
+	var context: Dictionary = sequence.context.duplicate(true)
+	context["kind"] = SHOW_CHOICE_KIND
+	context["rule_sequence_id"] = sequence.sequence_id
+	context["choice_chooser_id"] = int(sequence.context.target_id)
+	resolver.host.request_card_choice(int(sequence.context.target_id), "火攻展示", "请选择一张手牌展示", candidates, 1, 1, false, context)
 
 
-## 公开目标手牌并请求使用者决定是否弃置一张同花色手牌。
-func _apply_shown_card(resolver: Object, context: Dictionary, shown_card_uid: int) -> void:
-	# 火攻使用者 ID；负责后续弃牌和造成伤害。
-	var actor_id: int = int(context.get("actor_id", -1))
-	# 火攻目标 ID；展示牌必须仍属于其普通手牌区。
-	var target_id: int = int(context.get("target_id", -1))
-	# 被展示手牌；展示端口只公开牌面，不移动实体。
-	var shown_card: CardInstance = resolver.host.reveal_hand_card(target_id, shown_card_uid, "fire_attack")
+## 公开实际选定手牌后询问同花色费用；两次选择不会通过手工续接重复收尾目标。
+func _show_and_choose_cost(sequence: RuleStepSequence, resolver: Object) -> void:
+	# 原展示结果；下一请求前清空结果槽，取消时不会沿用上一张展示牌。
+	var response: ChoiceResponse = sequence.choice_response
+	sequence.choice_response = null
+	if response == null or response.card_ids.size() != 1 or not _is_original_fire_attack_valid(sequence, resolver):
+		return
+	# 当前原展示实体；等待期间离手则本次费用询问失效。
+	var shown_card: CardInstance = resolver.host.reveal_hand_card(int(sequence.context.target_id), response.card_ids[0], "fire_attack")
 	if shown_card == null:
-		resolver.host.record_failed_card_target(actor_id, get_id(), target_id)
 		return
-	# 火攻使用者状态；用于筛选同花色普通手牌。
-	var actor: PlayerState = resolver.state.get_player(actor_id)
-	# 使用者在展示等待期间阵亡时本牌已经整体失效；不再创建弃牌询问，也不会造成火焰伤害。
-	if actor == null or not actor.alive:
-		return
-	# 同花色弃牌候选；木牛“粮”和装备不能作为火攻费用。
-	var discard_candidates: Array[Dictionary] = []
-	for candidate: Dictionary in resolver.host.get_hand_candidates(actor_id, actor_id):
-		# 候选实体；使用 UID 回查当前手牌并读取真实花色。
+	sequence.context["suit"] = shown_card.suit
+	# 当前使用者；只允许同花色普通手牌，木牛粮与装备不作为火攻费用。
+	var actor: PlayerState = resolver.state.get_player(int(sequence.context.actor_id))
+	# 费用候选；即使没有同花色牌也建立可取消询问，避免泄露隐藏手牌。
+	var candidates: Array[Dictionary] = []
+	for candidate: Dictionary in resolver.host.get_hand_candidates(actor.player_id, actor.player_id):
+		# 当前候选实体；不以旧牌面或候选展示副本作为支付凭据。
 		var candidate_card: CardInstance = actor.find_hand_card(int(candidate.get("uid", -1)))
 		if candidate_card != null and candidate_card.suit == shown_card.suit:
-			discard_candidates.append(candidate)
-	# 弃牌阶段上下文；空选择表示放弃造成火焰伤害。
-	# private_info_safe_prompt：同花色手牌属于隐藏信息，候选为空时仍必须完整询问并由持有者手动取消，禁止静默跳过以免泄露手牌。
-	# card_definition_id：让统一选择评分能按稳定ID找到本牌定义并调用本牌的 score_ai_choice。
-	# 命中联动奖励：由视为使用本牌的技能声明，决定“对自己造成伤害”是否值得支付同花色手牌。
-	var discard_context: Dictionary = {
-		"kind":DISCARD_CHOICE_KIND,
-		"parent_card_uid":int(context.get("parent_card_uid", -1)),
-		"actor_id":actor_id,
-		"target_id":target_id,
-		"suit":shown_card.suit,
-		"private_info_safe_prompt":true,
-		"card_definition_id":get_id(),
-		VIRTUAL_STORAGE_HIT_REWARD_KEY:float(context.get(VIRTUAL_STORAGE_HIT_REWARD_KEY, 0.0)),
-	}
-	# 使用者选择结果；允许取消且至多弃置一张同花色手牌。即使无同花色候选也不得跳过本询问。
-	var selected_uids: Array[int] = resolver.host.request_card_choice(actor_id, "火攻弃牌", "是否弃置一张同花色手牌？", discard_candidates, 0, 1, true, discard_context)
-	if resolver.host.has_pending_card_choice():
+			candidates.append(candidate)
+	# 费用请求保留AI语义；结果写回同一个规则序列。
+	var context: Dictionary = sequence.context.duplicate(true)
+	context["kind"] = DISCARD_CHOICE_KIND
+	context["rule_sequence_id"] = sequence.sequence_id
+	context["choice_chooser_id"] = actor.player_id
+	resolver.host.request_card_choice(actor.player_id, "火攻弃牌", "是否弃置一张同花色手牌？", candidates, 0, 1, true, context)
+
+
+## 费用消费自身仍为子内容；完整弃牌After与伤害尾部结束后才回到最后目标收尾。
+func _pay_selected_cost(sequence: RuleStepSequence, resolver: Object) -> void:
+	if not _is_original_fire_attack_valid(sequence, resolver):
 		return
-	_apply_discard(resolver, discard_context, selected_uids)
+	# 最终确认材料；取消或未选择时按原失败目标规则记录。
+	var selected_uids: Array[int] = []
+	if sequence.choice_response != null and sequence.choice_response.confirmed:
+		selected_uids.assign(sequence.choice_response.card_ids)
+	_apply_discard(resolver, sequence.context, selected_uids)
+
+
+## 展示、费用、伤害及所有子内容都结束后只收尾一次原目标。
+func _finish_fire_attack(sequence: RuleStepSequence, resolver: Object) -> void:
+	resolver.host.complete_card_target(int(sequence.context.parent_card_uid))
 
 
 ## 应用同花色弃牌；只有费用仍合法且成功弃置时造成1点火焰伤害。
@@ -158,35 +171,33 @@ func _apply_discard(resolver: Object, context: Dictionary, selected_uids: Array[
 	if selected_card == null or selected_card.suit != str(context.get("suit", "")):
 		resolver.host.record_failed_card_target(actor_id, get_id(), target_id)
 		return
-	if resolver.host.discard_card_from_hand(actor_id, selected_card.uid):
-		# 伤害前目标状态；累计受伤次数可区分正常命中与被技能取消、减为0等未造成伤害结果。
-		var target: PlayerState = resolver.state.get_player(target_id)
-		# 伤害前累计受伤次数；目标不存在时使用-1并在结算后记录本次失败。
-		var previous_damage_taken_count: int = target.damage_taken_count if target != null else -1
-		# 来源牌上下文；制动等“此牌受到的直接响应数”效果通过父牌UID读取同一张【火攻】的无懈链。
-		var source_context: Dictionary = {"card_user_id":actor_id, "parent_card_uid":int(context.get("parent_card_uid", -1)), "damage_card_target_count":1}
-		resolver.host.damage(actor_id, target_id, DAMAGE_AMOUNT, "fire", "huogong", false, false, source_context)
-		if target == null or target.damage_taken_count <= previous_damage_taken_count:
-			resolver.host.record_failed_card_target(actor_id, get_id(), target_id)
-	else:
-		resolver.host.record_failed_card_target(actor_id, get_id(), target_id)
-
-
-## 恢复火攻展示或弃牌选择；异步链结束后推进当前逐目标结算。
-func continue_choice(resolver: Object, context: Dictionary, selected_uids: Array[int]) -> bool:
-	# 选择用途；火攻只创建展示和同花色弃牌两类请求。
-	var choice_kind: String = str(context.get("kind", ""))
-	if choice_kind == SHOW_CHOICE_KIND:
-		if not selected_uids.is_empty():
-			_apply_shown_card(resolver, context, selected_uids[0])
-		if not resolver.host.has_pending_card_choice():
-			resolver.host.complete_card_target(int(context.get("parent_card_uid", -1)))
-		return true
-	if choice_kind == DISCARD_CHOICE_KIND:
-		_apply_discard(resolver, context, selected_uids)
-		resolver.host.complete_card_target(int(context.get("parent_card_uid", -1)))
-		return true
-	return false
+	# 原费用身份；后续只按UID查回，不保留选择前的实体引用。
+	var cost_card_uid: int = selected_card.uid
+	# 原目标代次；费用After中的换将不能令新武将承受原火攻。
+	var target_generation: int = resolver.state.get_player(target_id).character_generation if resolver.state.get_player(target_id) != null else -1
+	resolver.host.run_rule_sequence([
+		func(sequence: RuleStepSequence) -> void: sequence.effect_result = resolver.host.discard_card_from_hand(actor_id, cost_card_uid),
+		func(sequence: RuleStepSequence) -> void:
+			if sequence.effect_result == null or sequence.effect_result.count <= 0:
+				resolver.host.record_failed_card_target(actor_id, get_id(), target_id)
+				sequence.finish()
+				return
+			# 伤害前目标状态；累计受伤次数可区分正常命中与被技能取消、减为0等未造成伤害结果。
+			var target: PlayerState = resolver.state.get_player(target_id)
+			if target == null or not target.alive or target.character_generation != target_generation:
+				sequence.finish()
+				return
+			# 伤害前累计受伤次数；目标不存在时使用-1并在结算后记录本次失败。
+			sequence.context["previous_damage_taken_count"] = target.damage_taken_count
+			# 来源牌上下文；制动等“此牌受到的直接响应数”效果通过父牌UID读取同一张【火攻】的无懈链。
+			var source_context: Dictionary = {"card_user_id":actor_id, "parent_card_uid":int(context.get("parent_card_uid", -1)), "damage_card_target_count":1}
+			resolver.host.damage(actor_id, target_id, DAMAGE_AMOUNT, "fire", "huogong", false, false, source_context),
+		func(sequence: RuleStepSequence) -> void:
+			# 伤害完整结束后的原目标；代次变化不对新角色写入旧目标失败记忆。
+			var target: PlayerState = resolver.state.get_player(target_id)
+			if target != null and target.character_generation == target_generation and target.damage_taken_count <= int(sequence.context.get("previous_damage_taken_count", -1)):
+				resolver.host.record_failed_card_target(actor_id, get_id(), target_id),
+	] as Array[Callable])
 
 
 ## 火攻被无懈抵消时记住本回合失败目标，防止AI立即再次对同一角色使用火攻。

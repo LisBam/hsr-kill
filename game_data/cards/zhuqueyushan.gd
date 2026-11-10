@@ -81,5 +81,4 @@ func continue_slash_choice(slash_effect: Object, context: Dictionary, selected_u
 		return false
 	if selected_uids.has(int(context.get("equipment_uid", -1))):
 		_apply_conversion(slash_effect.host, context)
-	slash_effect.host.continue_card_after_preparation(int(context.get("parent_card_uid", -1)))
 	return true

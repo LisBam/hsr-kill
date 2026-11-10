@@ -92,28 +92,41 @@ func _execute_haoxi(selected_target_ids: Array[int]) -> void:
 		valid_target_ids.append(target_id)
 	# 实际被弃置的实体UID；逐名目标独立等概率抽取，随机历史记录候选规模与命中下标。
 	var discarded_card_uids: Array[int] = []
+	# 目标弃置和收益逐步骤执行；真实成功UID只由对应结果接收者追加。
+	var steps: Array[Callable] = []
 	for target_id: int in valid_target_ids:
-		# 目标手牌；抽取前重新读取，保证读取的是当前真实手牌而不是过期快照。
-		var target_player: PlayerState = host.state.get_player(target_id)
-		var picked_index: int = int(host.call("pick_random_candidate_index", target_player.hand.size(), RANDOM_DISCARD_HISTORY_KIND, {"player_id":owner_player_id, "target_id":target_id}))
-		if picked_index < 0:
-			continue
-		# 选中的实体牌；弃置走统一端口，因此装备离开、保护规则与动画逻辑全部沿用既有实现。
-		var picked_uid: int = target_player.hand[picked_index].uid
-		var single_card_uids: Array[int] = [picked_uid]
-		if int(host.call("discard_selected_player_cards", target_id, single_card_uids, owner_player_id)) <= 0:
-			continue
-		discarded_card_uids.append(picked_uid)
-	# X = 2 - 本次选择的目标数；按选择数而非实际弃置数计算，避免目标中途失效反而多摸牌。
-	var basic_draw_count: int = maxi(BASIC_DRAW_BASE - selected_target_ids.size(), 0)
-	announce_activation({
-		"target_ids":selected_target_ids.duplicate(),
-		"discarded_target_ids":valid_target_ids.duplicate(),
-		"discarded_card_uids":discarded_card_uids,
-		"basic_draw_count":basic_draw_count,
-	})
-	_gain_random_basic_cards(basic_draw_count)
-	finish_joy_skill_performance()
+		steps.append(_discard_target_step.bind(target_id, discarded_card_uids))
+	steps.append(func(_sequence: RuleStepSequence) -> void:
+		# X = 2 - 本次选择的目标数；按选择数而非实际弃置数计算，避免目标中途失效反而多摸牌。
+		var basic_draw_count: int = maxi(BASIC_DRAW_BASE - selected_target_ids.size(), 0)
+		announce_activation({
+			"target_ids":selected_target_ids.duplicate(),
+			"discarded_target_ids":valid_target_ids.duplicate(),
+			"discarded_card_uids":discarded_card_uids,
+			"basic_draw_count":basic_draw_count,
+		})
+		_gain_random_basic_cards(basic_draw_count)
+	)
+	steps.append(func(_sequence: RuleStepSequence) -> void: finish_joy_skill_performance())
+	run_steps(steps)
+
+
+## 每名目标独占一个随机弃牌内容；前一目标全部触发结束后才读取下一名的手牌。
+func _discard_target_step(_sequence: RuleStepSequence, target_id: int, discarded_card_uids: Array[int]) -> void:
+	# 目标手牌；抽取前重新读取，保证读取的是当前真实手牌而不是过期快照。
+	var target_player: PlayerState = host.state.get_player(target_id)
+	# 权威随机下标；每次只从当前目标普通手牌中选择一张。
+	var picked_index: int = int(host.call("pick_random_candidate_index", target_player.hand.size(), RANDOM_DISCARD_HISTORY_KIND, {"player_id":owner_player_id, "target_id":target_id}))
+	if picked_index < 0:
+		return
+	# 选中的实体牌；弃置走统一端口，因此装备离开、保护规则与动画逻辑全部沿用既有实现。
+	var picked_uid: int = target_player.hand[picked_index].uid
+	# 本次唯一费用UID；完整弃牌结果由批次接收者处理。
+	var single_card_uids: Array[int] = [picked_uid]
+	host.call("discard_selected_player_cards", target_id, single_card_uids, owner_player_id, func(discarded_count: int) -> void:
+		if discarded_count > 0:
+			discarded_card_uids.append(picked_uid)
+	)
 
 
 ## 从摸牌堆中无放回随机获得指定数量的基本牌；牌堆内基本牌不足时按现有数量获得。
@@ -126,15 +139,22 @@ func _gain_random_basic_cards(draw_count: int) -> void:
 		if _is_basic_card(pile_card.definition_id):
 			basic_card_uids.append(pile_card.uid)
 	# 逐张无放回抽取；每抽取一张就从候选中移除，保证不会重复获得同一实体。
+	var steps: Array[Callable] = []
+	# 本次抽取序号；每张获得的全部After结束后才执行下一次随机取牌。
 	for draw_index: int in range(draw_count):
-		if basic_card_uids.is_empty():
-			break
-		var picked_index: int = int(host.call("pick_random_candidate_index", basic_card_uids.size(), RANDOM_GAIN_HISTORY_KIND, {"player_id":owner_player_id, "draw_index":draw_index}))
-		if picked_index < 0:
-			break
-		var picked_uid: int = basic_card_uids[picked_index]
-		basic_card_uids.remove_at(picked_index)
-		host.call("gain_draw_pile_card_by_uid", owner_player_id, picked_uid, get_id())
+		steps.append(func(_sequence: RuleStepSequence) -> void:
+			if basic_card_uids.is_empty():
+				return
+			# 本次随机索引；候选只按无放回规则消费，不重试取消的移动。
+			var picked_index: int = int(host.call("pick_random_candidate_index", basic_card_uids.size(), RANDOM_GAIN_HISTORY_KIND, {"player_id":owner_player_id, "draw_index":draw_index}))
+			if picked_index < 0:
+				return
+			# 被选实体UID；移走后下一步不会再次提交本张。
+			var picked_uid: int = basic_card_uids[picked_index]
+			basic_card_uids.remove_at(picked_index)
+			host.gain_draw_pile_card_by_uid(owner_player_id, picked_uid, get_id())
+		)
+	run_steps(steps)
 
 
 ## 判断卡牌定义是否属于基本牌；只读取静态类型，不读取当前牌名设置。

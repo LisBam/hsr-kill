@@ -894,7 +894,18 @@ func get_cardless_response_definition_id(_response_patterns: Array[String]) -> S
 	return ""
 
 
+## 在原选择关闭后启动可等待的无材料响应费用；null表示没有额外异步费用，不得在activate中提前产生子询问。
+func begin_cardless_response_cost(_response_patterns: Array[String], _context: Dictionary) -> RefCounted:
+	return null
+
+
+## 费用完整结束后的成功判据；需要精确数量的技能可覆盖，不把pending当作成功。
+func is_cardless_response_cost_satisfied(cost: RefCounted) -> bool:
+	return cost == null or (cost.completed and cost.success)
+
+
 ## 通知技能无材料响应已经通过权威校验并实际打出；费用应在 activate() 中完成，本回调只记录成功事实。
+## 可插入的费用使用begin_cardless_response_cost，activate仅做响应声明；此通知不重复支付费用。
 func on_cardless_response_consumed(_response_pattern: String, _virtual_definition_id: String) -> void:
 	pass
 
@@ -1418,6 +1429,16 @@ func request_step_cards(sequence: RuleStepSequence, title: String, prompt: Strin
 	selection_context["rule_sequence_id"] = sequence.sequence_id
 	sequence.choice_response = null
 	request_card_selection(title, prompt, candidates, min_select, max_select, allow_cancel, selection_context)
+
+
+## 通过统一包装器执行技能时机回调，并在调用期间保存可序列化事件快照供announce_activation登记重放入口。
+## 在内容步骤中询问响应并等待全部消费窗口；下一步直接读取sequence.response_card，无需continue_response分支。
+func request_step_response(sequence: RuleStepSequence, player_id: int, response_patterns: Array[String], prompt: String, context: Dictionary = {}) -> void:
+	# 保留技能归属与AI语义；响应使用单独结果身份，避免误走普通牌选择结果槽。
+	var response_context: Dictionary = _build_selection_context(context)
+	response_context["rule_response_sequence_id"] = sequence.sequence_id
+	sequence.response_card = null
+	sequence.response_card = host.call("request_response_card_patterns", player_id, response_patterns, prompt, response_context) as CardInstance
 
 
 ## 通过统一包装器执行技能时机回调，并在调用期间保存可序列化事件快照供announce_activation登记重放入口。

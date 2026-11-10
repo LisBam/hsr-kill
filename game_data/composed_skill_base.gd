@@ -474,17 +474,25 @@ func _dispatch_effect() -> void:
 		"virtual_shunshou":
 			_request_virtual_card_target_step("shunshou")
 		"draw_two_lose_skill":
-			host.call("draw", owner_player_id, DRAW_TWO_COUNT)
-			_finish_effect()
+			run_steps([
+				func(_sequence: RuleStepSequence) -> void: host.call("draw", owner_player_id, DRAW_TWO_COUNT),
+				func(_sequence: RuleStepSequence) -> void: _finish_effect(),
+			])
 		"recover_one_lose_skill":
-			host.call("recover", owner_player_id, owner_player_id, RECOVER_ONE_AMOUNT, "composed_recover_one")
-			_finish_effect()
+			run_steps([
+				func(_sequence: RuleStepSequence) -> void: host.call("recover", owner_player_id, owner_player_id, RECOVER_ONE_AMOUNT, "composed_recover_one"),
+				func(_sequence: RuleStepSequence) -> void: _finish_effect(),
+			])
 		"gain_max_hp_lose_skill":
-			host.call("change_max_hp", owner_player_id, MAX_HP_GAIN_AMOUNT, owner_player_id, "composed_gain_max_hp")
-			_finish_effect()
+			run_steps([
+				func(_sequence: RuleStepSequence) -> void: host.call("change_max_hp", owner_player_id, MAX_HP_GAIN_AMOUNT, owner_player_id, "composed_gain_max_hp"),
+				func(_sequence: RuleStepSequence) -> void: _finish_effect(),
+			])
 		"gain_shield_lose_skill":
-			host.call("shield", owner_player_id, GAIN_SHIELD_AMOUNT, owner_player_id, "composed_gain_shield")
-			_finish_effect()
+			run_steps([
+				func(_sequence: RuleStepSequence) -> void: host.call("shield", owner_player_id, GAIN_SHIELD_AMOUNT, owner_player_id, "composed_gain_shield"),
+				func(_sequence: RuleStepSequence) -> void: _finish_effect(),
+			])
 		"discard_one_hand":
 			_request_own_hand_discard_step()
 		"random_discard_one":
@@ -512,20 +520,30 @@ func _dispatch_effect() -> void:
 		"next_recover_minus1":
 			_open_window(WINDOW_NEXT_RECOVER)
 		"lose_hp_lose_skill":
-			host.call("lose_hp", owner_player_id, owner_player_id, LOSE_HP_AMOUNT, "composed_lose_hp")
-			_finish_effect()
+			run_steps([
+				func(_sequence: RuleStepSequence) -> void: host.call("lose_hp", owner_player_id, owner_player_id, LOSE_HP_AMOUNT, "composed_lose_hp"),
+				func(_sequence: RuleStepSequence) -> void: _finish_effect(),
+			])
 		"take_damage_lose_skill":
-			host.call("damage", owner_player_id, owner_player_id, TAKE_DAMAGE_AMOUNT, "normal", "", false, false, {"source_skill_id":get_instance_key()})
-			_finish_effect()
+			run_steps([
+				func(_sequence: RuleStepSequence) -> void: host.call("damage", owner_player_id, owner_player_id, TAKE_DAMAGE_AMOUNT, "normal", "", false, false, {"source_skill_id":get_instance_key()}),
+				func(_sequence: RuleStepSequence) -> void: _finish_effect(),
+			])
 		"take_thunder_damage_lose_skill":
-			host.call("damage", owner_player_id, owner_player_id, TAKE_DAMAGE_AMOUNT, "thunder", "", false, false, {"source_skill_id":get_instance_key()})
-			_finish_effect()
+			run_steps([
+				func(_sequence: RuleStepSequence) -> void: host.call("damage", owner_player_id, owner_player_id, TAKE_DAMAGE_AMOUNT, "thunder", "", false, false, {"source_skill_id":get_instance_key()}),
+				func(_sequence: RuleStepSequence) -> void: _finish_effect(),
+			])
 		"take_fire_damage_lose_skill":
-			host.call("damage", owner_player_id, owner_player_id, TAKE_DAMAGE_AMOUNT, "fire", "", false, false, {"source_skill_id":get_instance_key()})
-			_finish_effect()
+			run_steps([
+				func(_sequence: RuleStepSequence) -> void: host.call("damage", owner_player_id, owner_player_id, TAKE_DAMAGE_AMOUNT, "fire", "", false, false, {"source_skill_id":get_instance_key()}),
+				func(_sequence: RuleStepSequence) -> void: _finish_effect(),
+			])
 		"lose_max_hp_lose_skill":
-			host.call("change_max_hp", owner_player_id, -MAX_HP_LOSS_AMOUNT, owner_player_id, "composed_lose_max_hp")
-			_finish_effect()
+			run_steps([
+				func(_sequence: RuleStepSequence) -> void: host.call("change_max_hp", owner_player_id, -MAX_HP_LOSS_AMOUNT, owner_player_id, "composed_lose_max_hp"),
+				func(_sequence: RuleStepSequence) -> void: _finish_effect(),
+			])
 		_:
 			# 池条目存在但没有实现分支；IMPLEMENTED_EFFECT_KEYS 与数据池的一致性由测试核对。
 			push_error("组合技能效果未实现：%s" % _effect_key)

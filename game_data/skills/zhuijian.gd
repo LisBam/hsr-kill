@@ -115,25 +115,13 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 	# 本次作为发动费用弃置的唯一卡牌实体ID；显式使用强类型数组以适配权威弃牌接口。
 	var selected_cost_uids: Array[int] = [response.card_ids[0]]
 	# 实际弃置数量；权威端口只接受仍在持有者手牌或装备区中的所选实体。
-	var discarded_count: int = int(host.call("discard_selected_hand_equipment", owner_player_id, selected_cost_uids))
-	if discarded_count != 1:
-		return true
-	announce_activation({"target_id":target_id, "card_uid":response.card_ids[0]})
-	observe_identity_behavior([target_id], {"target_result":-1.0, "damage":true, "nature_damage":true})
-	# 弃牌引发的失牌技能或装备询问必须先完成，随后再写入追歼标记。
-	# 补充：这里的“标记”仅指本技能实例的持续目标与武将牌提示，不调用公开标记服务。
-	if bool(host.call("has_nested_settlement_barrier")):
-		defer_settlement({"kind":"zhuijian_apply_mark", "target_id":target_id})
-	else:
+	host.call("discard_selected_hand_equipment", owner_player_id, selected_cost_uids, func(discarded_count: int) -> void:
+		if discarded_count <= 0:
+			return
+		announce_activation({"target_id":target_id, "card_uid":response.card_ids[0]})
+		observe_identity_behavior([target_id], {"target_result":-1.0, "damage":true, "nature_damage":true})
 		_apply_mark(target_id)
-	return true
-
-
-## 在弃牌产生的全部嵌套结算结束后建立追歼持续效果。
-func continue_settlement(context: Dictionary) -> bool:
-	if str(context.get("kind", "")) != "zhuijian_apply_mark":
-		return false
-	_apply_mark(int(context.get("target_id", -1)))
+	)
 	return true
 
 

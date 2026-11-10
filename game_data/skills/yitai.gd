@@ -66,6 +66,9 @@ const AI_ACTION_BASE_VALUE: float = 2.0
 ## AI 复制不同类别卡牌时的类别偏好加分；锦囊牌通常带来最大节奏收益，装备牌次之，基本牌最稳定。
 const AI_COPY_TYPE_BONUS: Dictionary = {"trick":2.0, "equipment":1.0, "basic":0.0}
 
+## 当前造牌内容身份；默认-1无请求，只查询宿主的实际内容寿命，取消或换将后不需要独立恢复标志。
+var _mint_sequence_id: int = -1
+
 
 ## 写入技能静态信息；玩家可见描述严格保持需求提供的原文。
 ## 「限定技」出现在正文开头，SkillDefinition 据此自动标记 limited，无需显式声明。
@@ -89,7 +92,7 @@ func install() -> void:
 func can_activate(_context: Dictionary = {}) -> bool:
 	# 技能持有者；死亡、离场、额度用尽或不在自己出牌阶段时均不可用。
 	var owner: PlayerState = get_owner_skill_player().get_state()
-	return owner != null and owner.alive and not owner.out_of_game and has_available_intrinsic_use() \
+	return owner != null and owner.alive and not owner.out_of_game and has_available_intrinsic_use() and not host.call("is_rule_sequence_pending", _mint_sequence_id) \
 		and host.state.current_player_id == owner_player_id and host.state.current_phase == "play"
 
 
@@ -167,7 +170,7 @@ func _on_phase_after(_event: RuleEvent) -> void:
 ## 回放重放、事件调度重跑同一步），提交路径就会再执行一次造牌；它不查额度，限定技就会在一个
 ## 出牌阶段里造出第二张牌。因此「一局一次」必须同时由发动入口与效果落地处各自把关。
 func _execute_mint(control_id: String) -> bool:
-	if not has_available_intrinsic_use():
+	if not has_available_intrinsic_use() or bool(host.call("is_rule_sequence_pending", _mint_sequence_id)):
 		host.call("add_log", "【以太】是限定技，本局已经发动过，不能再创造卡牌。")
 		return false
 	if not control_id.begins_with(MINT_CONTROL_PREFIX):
@@ -182,13 +185,19 @@ func _execute_mint(control_id: String) -> bool:
 	var rank: int = int(segments[4])
 	var source_definition_id: String = segments[5]
 	# 造牌端口是唯一权威判据：牌名格式与唯一性、花色点数合法性、定义存在性都在其中复核。
-	var minted_uid: int = int(host.call("mint_card_for_player", owner_player_id, source_definition_id, custom_name, suit, rank, MINTED_SKILL_ID))
-	if minted_uid < 0:
-		host.call("add_log", "【以太】未能创造卡牌：%s" % str(host.call("get_card_name_rejection_reason", custom_name)))
-		return false
 	# 记录发动；此时才消耗限定技的固有额度。
-	announce_activation({"minted_card_uid":minted_uid, "custom_name":custom_name, "suit":suit, "rank":rank, "source_definition_id":source_definition_id})
-	return true
+	# 造牌与额度提交属于同一技能序列，完整获得After及其子内容结束后才记录成功。
+	_mint_sequence_id = run_steps([
+		func(sequence: RuleStepSequence) -> void:
+			_mint_sequence_id = sequence.sequence_id
+			sequence.effect_result = host.call("mint_card_for_player", owner_player_id, source_definition_id, custom_name, suit, rank, MINTED_SKILL_ID),
+		func(sequence: RuleStepSequence) -> void:
+			if sequence.effect_result == null or not bool(sequence.effect_result.result.get("success", false)):
+				host.call("add_log", "【以太】未能创造卡牌：%s" % str(host.call("get_card_name_rejection_reason", custom_name)))
+				return
+			announce_activation({"minted_card_uid":int(sequence.effect_result.result.card_uid), "custom_name":custom_name, "suit":suit, "rank":rank, "source_definition_id":source_definition_id})
+	])
+	return _mint_sequence_id >= 0
 
 
 ## 构造可被复制的卡牌选项；按「基本牌 → 锦囊牌 → 装备牌」分组，组内保持数据库声明顺序。

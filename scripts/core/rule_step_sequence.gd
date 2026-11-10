@@ -18,14 +18,27 @@ var waiting_event: RuleEvent
 ## 最近选择结果；默认空，提交后下一步可直接读取牌、目标及确认状态。
 var choice_response: ChoiceResponse
 
+## 当前步骤完整消费后的响应实体或代理；null仅在询问完成后表示明确放弃。
+var response_card: CardInstance
+
+## 当前内容创建的原生子事件；下一步等待其完整after与最终归档。
+var pending_native_event_ids: Array[int] = []
+
+## 本步骤创建的规则子内容；包括最后一步创建的异步操作，子内容结束前父序列仍保留身份。
+var pending_rule_sequence_ids: Array[int] = []
+
+## 当前步骤发起的规则操作结果；仅运行期持有，下一步读取，不把服务对象写入context或回放。
+## 可保存单牌移动、批量移牌等独立结果对象；等待仍由公共父子内容链负责。
+var effect_result: RefCounted
+
 ## 剩余步骤是否终止；默认false，结束不会越过本步已产生的子结算。
 var finished: bool = false
 
 ## 本步开始时的技能续接序号；默认0，用于区分新子结算与旧外层结算。
 var skill_settlement_watermark: int = 0
 
-## 创建内容时已存在的外层判定ID；默认-1，仅新判定才是本序列需要等待的子流程。
-var enclosing_judgment_request_id: int = -1
+## 创建时已经存在的全部外层判定身份；嵌套内容只等待之后新建的子判定，不反向等待祖先。
+var enclosing_judgment_request_ids: Array[int] = []
 
 ## 创建序列时已存在的独立出牌阶段身份；仅等待之后插入的子阶段，不等待包含自己的外层阶段。
 var enclosing_play_phase_id: int = -1

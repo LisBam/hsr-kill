@@ -53,15 +53,16 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 		if response == null or response.card_ids.size() != 2:
 			return true
 		# 实际弃置数量；必须成功弃满两张才继续弃判定区。
-		var discarded_count: int = int(host.call("discard_selected_hand_cards", owner_player_id, response.card_ids))
-		if discarded_count < 2:
-			return true
-		# 判定区候选；只读当前持有者判定区实体，UID 作为唯一选择边界。
-		var judgment_candidates: Array[Dictionary] = host.call("get_judgment_candidates", owner_player_id, owner_player_id) as Array[Dictionary]
-		if judgment_candidates.is_empty():
-			announce_activation({"hand_card_uids":response.card_ids.duplicate()})
-			return true
-		request_card_selection("飞扬", "请弃置判定区内的一张牌", judgment_candidates, 1, 1, false, {"kind":"feiyang_discard_judgment", "hand_card_uids":response.card_ids.duplicate()})
+		host.call("discard_selected_hand_cards", owner_player_id, response.card_ids, func(discarded_count: int) -> void:
+			if discarded_count < 2:
+				return
+			# 判定区候选；只读当前持有者判定区实体，UID 作为唯一选择边界。
+			var judgment_candidates: Array[Dictionary] = host.call("get_judgment_candidates", owner_player_id, owner_player_id) as Array[Dictionary]
+			if judgment_candidates.is_empty():
+				announce_activation({"hand_card_uids":response.card_ids.duplicate()})
+				return
+			request_card_selection("飞扬", "请弃置判定区内的一张牌", judgment_candidates, 1, 1, false, {"kind":"feiyang_discard_judgment", "hand_card_uids":response.card_ids.duplicate()})
+		)
 		return true
 	if choice_kind == "feiyang_discard_judgment":
 		if response != null and not response.card_ids.is_empty():

@@ -86,17 +86,20 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 		return true
 	# 限制目标稳定副本；费用与额外回合成功后写入，避免后续普通统计清空影响语义。
 	var restricted_target_ids: Dictionary = _slash_target_ids_this_turn.duplicate(true)
-	if not bool(host.call("discard_card_from_hand", owner_player_id, card_uid)):
-		return true
-	if not get_owner_skill_player().addPhase():
-		return true
-	_used_this_round = true
-	_pending_restricted_target_ids = restricted_target_ids
-	# 公开目标数组；用于技能表现、身份观察和回放，不暴露字典内部引用。
-	var observed_target_ids: Array[int] = []
-	for target_id_variant: Variant in restricted_target_ids.keys():
-		observed_target_ids.append(int(target_id_variant))
-	announce_activation({"cost_card_uid":card_uid, "restricted_target_ids":observed_target_ids.duplicate()})
+	run_steps([
+		func(sequence: RuleStepSequence) -> void: sequence.effect_result = host.discard_card_from_hand(owner_player_id, card_uid),
+		func(sequence: RuleStepSequence) -> void:
+			if sequence.effect_result == null or sequence.effect_result.count <= 0 or not get_owner_skill_player().addPhase():
+				return
+			_used_this_round = true
+			_pending_restricted_target_ids = restricted_target_ids
+			# 公开目标数组；用于技能表现、身份观察和回放，不暴露字典内部引用。
+			var observed_target_ids: Array[int] = []
+			# 已锁定目标身份；费用期间新增目标不追溯加入。
+			for target_id_variant: Variant in restricted_target_ids.keys():
+				observed_target_ids.append(int(target_id_variant))
+			announce_activation({"cost_card_uid":card_uid, "restricted_target_ids":observed_target_ids.duplicate()}),
+	])
 	return true
 
 

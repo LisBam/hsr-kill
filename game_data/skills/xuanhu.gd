@@ -44,10 +44,15 @@ func _on_player_died(_event: RuleEvent) -> void:
 		if card == null or card.definition_id != PEACH_DEFINITION_ID:
 			continue
 		# 取得该实体牌；取得失败说明牌已在等待期间离开牌堆，按“本次不获得”处理。
-		var gained_card: CardInstance = host.call("gain_draw_pile_card_by_uid", owner_player_id, card.uid, get_id()) as CardInstance
-		if gained_card == null:
-			return
-		announce_activation({"gained_card_uid":card.uid, "gained_card_id":PEACH_DEFINITION_ID})
+		# 仅保留本次选定身份；不把循环内牌实体带入后续步骤。
+		var card_uid: int = card.uid
+		# 获得结果槽；没有明确完成成功时不记录发动收益。
+		run_steps([
+			func(_sequence: RuleStepSequence) -> void: _sequence.effect_result = host.gain_draw_pile_card_by_uid(owner_player_id, card_uid, get_id()),
+			func(_sequence: RuleStepSequence) -> void:
+				if _sequence.effect_result != null and _sequence.effect_result.completed and bool(_sequence.effect_result.result.get("success", false)):
+					announce_activation({"gained_card_uid":card_uid, "gained_card_id":PEACH_DEFINITION_ID}),
+		])
 		return
 	# 牌堆中没有【桃】时本效果无牌可得；不洗牌、不改动牌堆，也不产生任何日志与错误。
 

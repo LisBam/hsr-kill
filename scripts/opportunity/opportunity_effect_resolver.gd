@@ -12,44 +12,19 @@ var _host: MatchController
 ## 当前对局权威状态；解析器只读取角色与牌区，不直接修改数组或数值。
 var _state: GameState
 
-## 等待逐张交入机缘拥有者手牌的实体队列；每项只保存card_uid与receiver_id，区域在移动时重新复核。
-var _pending_transfer_entries: Array[Dictionary] = []
-
-## 等待从原持有者装备区移入处理区的交换条目；双方全部清空后才进入安装阶段。
-var _pending_equipment_evacuation_entries: Array[Dictionary] = []
-
-## 已经移入处理区、等待装入对方同槽的装备交换条目。
-var _pending_equipment_install_entries: Array[Dictionary] = []
-
 ## “任意名角色各弃一张”尚未处理的目标队列；顺序保留玩家提交顺序。
 var _pending_discard_one_target_ids: Array[int] = []
 
 ## 批量逐目标弃牌的机缘拥有者；默认-1表示当前没有该流程。
 var _pending_discard_one_owner_id: int = -1
 
-## 区域弃牌触发嵌套结算后等待执行的等量摸牌；空字典表示没有后续。
-var _pending_draw_after_discard: Dictionary = {}
-
-## 等待依次翻面的角色ID队列；每个翻面时机及其嵌套选择完整结束后才处理下一名角色。
-var _pending_turn_over_target_ids: Array[int] = []
-
-## 当前是否正在结算翻面机缘；即使最后一名目标产生嵌套结算，也能在恢复时准确完成本张机缘。
-var _pending_turn_over_resolution_active: bool = false
-
-
 ## 绑定当前机缘系统、控制器与状态；每局重新调用，避免跨局保存旧状态引用。
 func configure(system: OpportunitySystem, host: MatchController, state: GameState) -> void:
 	_system = system
 	_host = host
 	_state = state
-	_pending_transfer_entries.clear()
-	_pending_equipment_evacuation_entries.clear()
-	_pending_equipment_install_entries.clear()
 	_pending_discard_one_target_ids.clear()
 	_pending_discard_one_owner_id = -1
-	_pending_draw_after_discard.clear()
-	_pending_turn_over_target_ids.clear()
-	_pending_turn_over_resolution_active = false
 
 
 ## 解析一张已经完成全体选择的机缘卡；异步目标请求会保留当前效果，选择返回后再通知系统完成。
@@ -58,23 +33,27 @@ func resolve_card(owner_player_id: int, card_definition: Dictionary) -> void:
 	var effect_id: String = str(card_definition.get("effect", ""))
 	match effect_id:
 		"draw":
-			_host.draw(owner_player_id, int(card_definition.get("count", 0)), true, true)
-			_system.complete_current_effect()
+			_run_effect_with_completion(func() -> void:
+				_host.draw(owner_player_id, int(card_definition.get("count", 0)), true, true)
+			)
 		"recover":
-			_host.recover(owner_player_id, owner_player_id, int(card_definition.get("count", 0)), "opportunity", true)
-			_system.complete_current_effect()
+			_run_effect_with_completion(func() -> void:
+				_host.recover(owner_player_id, owner_player_id, int(card_definition.get("count", 0)), "opportunity", true)
+			)
 		"hand_limit":
 			_host.add_hand_limit_bonus(owner_player_id, int(card_definition.get("count", 0)), "opportunity", true)
 			_system.complete_current_effect()
 		"max_hp":
-			_host.change_max_hp(owner_player_id, int(card_definition.get("count", 0)), owner_player_id, "opportunity", true)
-			_system.complete_current_effect()
+			_run_effect_with_completion(func() -> void:
+				_host.change_max_hp(owner_player_id, int(card_definition.get("count", 0)), owner_player_id, "opportunity", true)
+			)
 		"recover_full":
-			# 机缘持有者；等待全体选择期间可能已经死亡或离场，无效目标只跳过本张效果。
-			var recover_owner: PlayerState = _state.get_player(owner_player_id)
-			if recover_owner != null:
-				_host.recover(owner_player_id, owner_player_id, maxi(recover_owner.max_hp - recover_owner.hp, 0), "opportunity", true)
-			_system.complete_current_effect()
+			_run_effect_with_completion(func() -> void:
+				# 机缘持有者；等待全体选择期间可能已经死亡或离场，无效目标只跳过本张效果。
+				var recover_owner: PlayerState = _state.get_player(owner_player_id)
+				if recover_owner != null:
+					_host.recover(owner_player_id, owner_player_id, maxi(recover_owner.max_hp - recover_owner.hp, 0), "opportunity", true)
+			)
 		"grant_skill":
 			_host.grant_acquired_skill(owner_player_id, str(card_definition.get("skill_id", "")), int(card_definition.get("per_turn_limit", 0)), int(card_definition.get("total_limit", 0)), "opportunity", true, int(card_definition.get("per_round_limit", 0)))
 			_system.complete_current_effect()
@@ -82,24 +61,30 @@ func resolve_card(owner_player_id: int, card_definition: Dictionary) -> void:
 			# 被动机缘已在全体选择完成时写入角色历史；控制器在对应规则查询点从历史汇总，无须重复修改状态。
 			_system.complete_current_effect()
 		"double_max_hp":
-			# 体力上限翻倍目标；增加量等于结算时的当前上限，后续其他修正不会回溯重算。
-			var max_hp_owner: PlayerState = _state.get_player(owner_player_id)
-			if max_hp_owner != null:
-				_host.change_max_hp(owner_player_id, max_hp_owner.max_hp, owner_player_id, "opportunity", true)
-			_system.complete_current_effect()
+			_run_effect_with_completion(func() -> void:
+				# 体力上限翻倍目标；增加量等于结算时的当前上限，后续其他修正不会回溯重算。
+				var max_hp_owner: PlayerState = _state.get_player(owner_player_id)
+				if max_hp_owner != null:
+					_host.change_max_hp(owner_player_id, max_hp_owner.max_hp, owner_player_id, "opportunity", true)
+			)
 		"gain_group_cards":
-			_host.gain_group_cards_from_draw_or_discard(owner_player_id, str(card_definition.get("group_kind", "")), card_definition.get("groups", []) as Array, int(card_definition.get("count", 0)), "opportunity", true)
-			_system.complete_current_effect()
+			_run_effect_with_completion(func() -> void:
+				_host.gain_group_cards_from_draw_or_discard(owner_player_id, str(card_definition.get("group_kind", "")), card_definition.get("groups", []) as Array, int(card_definition.get("count", 0)), "opportunity", true)
+			)
 		"gain_group_and_skill":
-			_host.gain_group_cards_from_draw_or_discard(owner_player_id, str(card_definition.get("group_kind", "")), card_definition.get("groups", []) as Array, int(card_definition.get("count", 0)), "opportunity", true)
-			_host.grant_acquired_skill(owner_player_id, str(card_definition.get("skill_id", "")), 0, 0, "opportunity", true)
-			_system.complete_current_effect()
+			_run_effect_with_completion(func() -> void:
+				_host.gain_group_cards_from_draw_or_discard(owner_player_id, str(card_definition.get("group_kind", "")), card_definition.get("groups", []) as Array, int(card_definition.get("count", 0)), "opportunity", true)
+			, func() -> void:
+				_host.grant_acquired_skill(owner_player_id, str(card_definition.get("skill_id", "")), 0, 0, "opportunity", true)
+			)
 		"gain_same_name_length_and_skill":
-			# 同字数取牌数量；目录以4张配置，牌堆与弃牌堆合计不足时按实际可取得数量结算。
-			var same_name_length_count: int = maxi(int(card_definition.get("count", 0)), 0)
-			_host.gain_same_name_length_cards_from_draw_or_discard(owner_player_id, same_name_length_count, "opportunity", true)
-			_host.grant_acquired_skill(owner_player_id, str(card_definition.get("skill_id", "")), 0, 0, "opportunity", true)
-			_system.complete_current_effect()
+			_run_effect_with_completion(func() -> void:
+				# 同字数取牌数量；目录以4张配置，牌堆与弃牌堆合计不足时按实际可取得数量结算。
+				var same_name_length_count: int = maxi(int(card_definition.get("count", 0)), 0)
+				_host.gain_same_name_length_cards_from_draw_or_discard(owner_player_id, same_name_length_count, "opportunity", true)
+			, func() -> void:
+				_host.grant_acquired_skill(owner_player_id, str(card_definition.get("skill_id", "")), 0, 0, "opportunity", true)
+			)
 		"skip_judgment_phase", "skip_discard_phase":
 			# 永久跳过阶段只写入机缘历史；控制器在每个对应阶段入口查询历史，避免保存第二份可漂移状态。
 			_system.complete_current_effect()
@@ -114,12 +99,13 @@ func resolve_card(owner_player_id: int, card_definition: Dictionary) -> void:
 			_system.grant_random_unowned_opportunities(owner_player_id, str(card_definition.get("quality_id", "")), random_opportunity_count)
 			_system.complete_current_effect()
 		"gain_named_and_skill":
-			# 需要获得的同名牌数量；逐次从摸牌堆或弃牌堆顶部方向检索，缺牌时获得现存数量。
-			var named_card_count: int = maxi(int(card_definition.get("count", 0)), 0)
-			for _card_index: int in range(named_card_count):
-				_host.gain_top_named_card_from_draw_or_discard(owner_player_id, str(card_definition.get("definition_id", "")), "opportunity", true)
-			_host.grant_acquired_skill(owner_player_id, str(card_definition.get("skill_id", "")), 0, 0, "opportunity", true)
-			_system.complete_current_effect()
+			_run_effect_with_completion(func() -> void:
+				# 需要获得的同名牌数量；逐次从摸牌堆或弃牌堆顶部方向检索，缺牌时获得现存数量。
+				var named_card_count: int = maxi(int(card_definition.get("count", 0)), 0)
+				_host.gain_group_cards_from_draw_or_discard(owner_player_id, "definition_id", [str(card_definition.get("definition_id", ""))], named_card_count, "opportunity", true)
+			, func() -> void:
+				_host.grant_acquired_skill(owner_player_id, str(card_definition.get("skill_id", "")), 0, 0, "opportunity", true)
+			)
 		"extra_turns":
 			# 额外回合数量；每次单独入队，确保三个完整回合依次执行后再恢复原本下家。
 			var extra_turn_count: int = maxi(int(card_definition.get("count", 0)), 0)
@@ -177,25 +163,7 @@ func continue_choice(context: Dictionary, response: ChoiceResponse) -> bool:
 		var owner_player_id: int = int(context.get("opportunity_owner_id", -1))
 		# 区域牌原持有者；等待期间牌可能离区，移动端口会逐张重新校验UID。
 		var target_player_id: int = int(context.get("target_player_id", -1))
-		# 外层恢复点；弃置、获得和后续摸牌产生的内部时机必须先于机缘队列恢复。
-		var continuation_guard_id: int = _host.begin_opportunity_resolution_guard()
-		if zone_operation == "discard_two":
-			_host.discard_selected_player_cards(target_player_id, response.card_ids, owner_player_id)
-		elif zone_operation == "gain_one" and response.card_ids.size() == 1:
-			_host.take_selected_player_card(owner_player_id, target_player_id, response.card_ids[0])
-		elif zone_operation == "discard_and_draw":
-			# 实际弃置数；等待期间离区或受保护的实体不计入后续摸牌数量。
-			var discarded_count: int = _host.discard_selected_player_cards(target_player_id, response.card_ids if response.confirmed else [], owner_player_id)
-			if discarded_count > 0 and _host.has_nested_settlement_barrier():
-				_pending_draw_after_discard = {"player_id":owner_player_id, "count":discarded_count}
-				return true
-			_host.draw(owner_player_id, discarded_count, true, true)
-		elif zone_operation == "discard_half_all":
-			_host.discard_selected_player_cards(target_player_id, response.card_ids if response.confirmed else [], owner_player_id)
-		if _host.has_nested_settlement_barrier():
-			return true
-		_host.cancel_opportunity_resolution_guard(continuation_guard_id)
-		_system.complete_current_effect()
+		_run_zone_operation(owner_player_id, target_player_id, zone_operation, response.card_ids if response.confirmed else [])
 		return true
 	if choice_kind == "opportunity_multi_discard_one":
 		# 当前逐目标弃牌来源与目标；本请求只允许选择该名角色区域内的一张合法牌。
@@ -215,29 +183,9 @@ func continue_choice(context: Dictionary, response: ChoiceResponse) -> bool:
 
 ## 在伤害、失去体力或移牌插入的濒死与技能选择全部结束后恢复当前机缘效果。
 func continue_after_barrier() -> bool:
-	if not _pending_draw_after_discard.is_empty():
-		# 弃牌后的等量摸牌；先清空后续标记，摸牌再次产生屏障时由系统完成入口重新登记。
-		var draw_context: Dictionary = _pending_draw_after_discard.duplicate(true)
-		_pending_draw_after_discard.clear()
-		# 新外层恢复点；上一段弃牌的恢复点已经消费，摸牌产生的新时机需要独立包裹。
-		var continuation_guard_id: int = _host.begin_opportunity_resolution_guard()
-		_host.draw(int(draw_context.get("player_id", -1)), int(draw_context.get("count", 0)), true, true)
-		if _host.has_nested_settlement_barrier():
-			return true
-		_host.cancel_opportunity_resolution_guard(continuation_guard_id)
-		_system.complete_current_effect()
-		return true
-	if not _pending_transfer_entries.is_empty():
-		_process_pending_transfers()
-		return true
-	if not _pending_equipment_evacuation_entries.is_empty() or not _pending_equipment_install_entries.is_empty():
-		_process_equipment_swap()
-		return true
+
 	if not _pending_discard_one_target_ids.is_empty() or _pending_discard_one_owner_id >= 0:
 		_process_next_discard_one_target()
-		return true
-	if _pending_turn_over_resolution_active:
-		_process_pending_turn_overs()
 		return true
 	return false
 
@@ -319,33 +267,26 @@ func _apply_target_effect(owner_player_id: int, card_definition: Dictionary, tar
 	if effect_id == "turn_over_target" and target_ids.size() == 1:
 		_begin_turn_over_targets(target_ids)
 		return
+	if effect_id == "discard_all_hand_target" and target_ids.size() == 1:
+		_host.run_rule_sequence([
+			func(_sequence: RuleStepSequence) -> void: _host.discard_all_hand_cards(target_ids[0], owner_player_id, "opportunity"),
+			_complete_effect_step,
+		], {"sequence_kind":"opportunity_discard_all"})
+		return
+	if effect_id == "link_targets":
+		_begin_link_or_turn_targets(target_ids, true, owner_player_id)
+		return
+	if effect_id in ["max_hp_target", "lose_hp_target", "lose_half_hp_target", "reduce_half_max_hp_target"] and target_ids.size() == 1:
+		_run_effect_with_completion(Callable(self, "_change_target_health").bind(effect_id, owner_player_id, target_ids[0], int(card_definition.get("count", 0))))
+		return
 	# 外层机缘恢复点；下列体力、伤害、弃牌和状态变化产生的内部续接必须先完成。
 	var continuation_guard_id: int = _host.begin_opportunity_resolution_guard()
 	if effect_id == "damage_target" and target_ids.size() == 1:
 		_host.damage(owner_player_id, target_ids[0], int(card_definition.get("count", 0)), "normal", "opportunity")
-	elif effect_id == "link_targets":
-		for target_id: int in target_ids:
-			_host.set_player_linked(target_id, true, owner_player_id, "opportunity")
-	elif effect_id == "max_hp_target" and target_ids.size() == 1:
-		_host.change_max_hp(target_ids[0], int(card_definition.get("count", 0)), owner_player_id, "opportunity")
-	elif effect_id == "lose_hp_target" and target_ids.size() == 1:
-		_host.lose_hp(owner_player_id, target_ids[0], int(card_definition.get("count", 0)), "opportunity")
-	elif effect_id == "discard_all_hand_target" and target_ids.size() == 1:
-		_host.discard_all_hand_cards(target_ids[0], owner_player_id, "opportunity")
 	elif effect_id == "swap_seat_target" and target_ids.size() == 1:
 		_host.swap_player_seats(owner_player_id, target_ids[0], "opportunity")
-	elif effect_id == "lose_half_hp_target" and target_ids.size() == 1:
-		# 目标结算时当前体力的一半并向上取整；正数体力使用整数公式(hp+1)/2。
-		var lose_hp_target: PlayerState = _state.get_player(target_ids[0])
-		if lose_hp_target != null:
-			_host.lose_hp(owner_player_id, target_ids[0], ceili(float(maxi(lose_hp_target.hp, 0)) / 2.0), "opportunity")
 	elif effect_id == "remove_until_round_end_target" and target_ids.size() == 1:
 		_host.remove_player_until_round_end(target_ids[0], "opportunity")
-	elif effect_id == "reduce_half_max_hp_target" and target_ids.size() == 1:
-		# 减少值按结算时体力上限的一半向上取整，最终仍由通用端口保证体力上限最低为1。
-		var max_hp_target: PlayerState = _state.get_player(target_ids[0])
-		if max_hp_target != null:
-			_host.change_max_hp(target_ids[0], -ceili(float(maxi(max_hp_target.max_hp, 0)) / 2.0), owner_player_id, "opportunity")
 	elif effect_id == "damage_current_hp_target" and target_ids.size() == 1:
 		# 伤害基数锁定为结算时目标当前体力值；护盾、防具和伤害时机仍可按普通伤害规则修改结果。
 		var current_hp_target: PlayerState = _state.get_player(target_ids[0])
@@ -361,26 +302,25 @@ func _apply_target_effect(owner_player_id: int, card_definition: Dictionary, tar
 
 ## 建立一组按座次或玩家选择顺序结算的翻面目标；空目标直接完成本张机缘。
 func _begin_turn_over_targets(target_ids: Array[int]) -> void:
-	_pending_turn_over_target_ids = target_ids.duplicate()
-	_pending_turn_over_resolution_active = true
-	_process_pending_turn_overs()
+	_begin_link_or_turn_targets(target_ids, false, -1)
 
 
-## 依次翻转队列中的武将牌；每名角色的翻面时机及嵌套选择结束后才继续下一名。
-func _process_pending_turn_overs() -> void:
-	if not _pending_turn_over_resolution_active:
-		return
-	while not _pending_turn_over_target_ids.is_empty():
-		# 当前翻面目标；先出队保证嵌套恢复后不会对同一角色重复翻面。
-		var target_id: int = _pending_turn_over_target_ids.pop_front()
-		# 外层机缘恢复点；turnOverBefore、End与After产生的选择必须完整结束后再处理下一目标。
-		var continuation_guard_id: int = _host.begin_opportunity_resolution_guard()
-		_host.turn_over_player(target_id, -1, "opportunity")
-		if _host.has_nested_settlement_barrier():
-			return
-		_host.cancel_opportunity_resolution_guard(continuation_guard_id)
-	_pending_turn_over_resolution_active = false
-	_system.complete_current_effect()
+## 每名目标状态完整结束后再执行下一名；移除逐目标手工恢复数组，最终完成通知归父内容持有。
+func _begin_link_or_turn_targets(target_ids: Array[int], link: bool, source_id: int) -> void:
+	# 有限目标步骤；稳定ID绑定到回调，不共享循环中的可变目标引用。
+	var steps: Array[Callable] = []
+	for target_id: int in target_ids:
+		steps.append(_change_target_orientation.bind(target_id, link, source_id))
+	steps.append(_complete_effect_step)
+	_host.run_rule_sequence(steps, {"sequence_kind":"opportunity_orientation"})
+
+
+## 调用统一状态结果；直接规则父子归属保证预算让帧与After子内容也完整等待。
+func _change_target_orientation(_sequence: RuleStepSequence, target_id: int, link: bool, source_id: int) -> void:
+	if link:
+		_host.set_player_linked(target_id, true, source_id, "opportunity")
+	else:
+		_host.turn_over_player(target_id, source_id, "opportunity")
 
 
 ## 以无实体材料的完整卡牌流程结算机缘“视为使用”；群体目标、响应与无懈均由卡牌规则层自动建立。
@@ -404,67 +344,132 @@ func _resolve_virtual_card_use(owner_player_id: int, card_definition: Dictionary
 
 ## 锁定一批实体牌并逐张交入同一角色手牌；每张移动后检查嵌套结算屏障。
 func _begin_transfer_cards(receiver_id: int, card_uids: Array[int], reason: String) -> void:
-	_pending_transfer_entries.clear()
+	# 原牌身份条目；构造后由同一规则序列逐张处理，不另设恢复队列。
+	var entries: Array[Dictionary] = []
+	# 本次实体UID；只处理最初选定牌，不临时补取替代实体。
 	for card_uid: int in card_uids:
-		_pending_transfer_entries.append({"card_uid":card_uid, "receiver_id":receiver_id, "reason":reason})
-	_process_pending_transfers()
+		entries.append({"card_uid":card_uid, "receiver_id":receiver_id, "reason":reason})
+	_start_transfer_steps(entries)
 
 
-## 继续逐张获得实体牌；等待期间已经离区的UID安全跳过，不会改为获得其他替代牌。
-func _process_pending_transfers() -> void:
-	while not _pending_transfer_entries.is_empty():
-		# 当前转移条目；先出队保证嵌套恢复时不会重复移动同一实体。
-		var transfer_entry: Dictionary = _pending_transfer_entries.pop_front()
-		# 外层恢复点；实体移动产生的失去牌、装备离区或获得牌续接必须位于其上方。
-		var transfer_guard_id: int = _host.begin_opportunity_resolution_guard()
-		_host.gain_card_to_hand_by_uid(int(transfer_entry.get("receiver_id", -1)), int(transfer_entry.get("card_uid", -1)), str(transfer_entry.get("reason", "opportunity")), true)
-		if _host.has_nested_settlement_barrier():
-			return
-		_host.cancel_opportunity_resolution_guard(transfer_guard_id)
+## 逐张获得实体牌；来源位置、双方代次与完成通知都归本次步骤内容所有。
+func _start_transfer_steps(entries: Array[Dictionary]) -> void:
+	# 本次内容；每张移动完整After后再进入下一张，最终完成机缘效果。
+	var steps: Array[Callable] = []
+	# 当前声明条目；稳定快照在首张移动前一次性锁定。
+	for entry: Dictionary in entries:
+		# 来源快照不含实体引用；同牌已经离区或换将时，本条目明确失败而不是获得新来源牌。
+		var source_snapshot: Dictionary = _host.get_card_location_snapshot(int(entry.get("card_uid", -1)))
+		# 接收角色；后续换将不得把本机缘交给的新牌塞入新武将区域。
+		var receiver: PlayerState = _state.get_player(int(entry.get("receiver_id", -1)))
+		source_snapshot["receiver_character_generation"] = receiver.character_generation if receiver != null else -1
+		steps.append(_transfer_card_step.bind(entry.duplicate(true), source_snapshot))
+	steps.append(_complete_effect_step)
+	_host.run_rule_sequence(steps, {"sequence_kind":"opportunity_transfer"})
+
+
+## 单条移牌在公共服务中产生独立结果；父步骤自然等待，不根据全局是否存在选择推测完成。
+func _transfer_card_step(_sequence: RuleStepSequence, entry: Dictionary, source_snapshot: Dictionary) -> void:
+	_host.gain_card_to_hand_by_uid(int(entry.get("receiver_id", -1)), int(entry.get("card_uid", -1)), str(entry.get("reason", "opportunity")), true, source_snapshot)
+
+
+## 区域操作先完成实际移牌及其子内容，再统一通知机缘效果完成。
+func _run_zone_operation(owner_player_id: int, target_player_id: int, operation: String, selected_uids: Array[int]) -> void:
+	_host.run_rule_sequence([_apply_zone_operation_step, _complete_effect_step], {"sequence_kind":"opportunity_zone_move", "owner_player_id":owner_player_id, "target_player_id":target_player_id, "operation":operation, "selected_uids":selected_uids.duplicate()})
+
+
+## 应用一次已接受的区域选择；费用回调产生的摸牌仍由同一父内容等待。
+func _apply_zone_operation_step(sequence: RuleStepSequence) -> void:
+	# 原机缘拥有者；获得与弃后摸牌均归此角色。
+	var owner_player_id: int = int(sequence.context.owner_player_id)
+	# 原目标；所选实体与区域由实际移动服务重新校验。
+	var target_player_id: int = int(sequence.context.target_player_id)
+	# 已接受实体身份；不遍历变化中的源区域数组。
+	var selected_uids: Array[int] = []
+	selected_uids.assign(sequence.context.selected_uids as Array)
+	match str(sequence.context.operation):
+		"discard_two", "discard_half_all":
+			_host.discard_selected_player_cards(target_player_id, selected_uids, owner_player_id)
+		"gain_one":
+			if selected_uids.size() == 1:
+				_host.take_selected_player_card(owner_player_id, target_player_id, selected_uids[0])
+		"discard_and_draw":
+			_host.discard_selected_player_cards(target_player_id, selected_uids, owner_player_id, func(discarded_count: int) -> void: _host.draw(owner_player_id, discarded_count, true, true))
+
+
+## 全部原牌已处理后通知机缘系统；取消单张移动不跳过剩余实体。
+func _complete_effect_step(_sequence: RuleStepSequence) -> void:
 	_system.complete_current_effect()
 
 
 ## 锁定双方当前全部普通手牌并建立双向转移队列；之后获得的新牌不参与本次交换。
 func _begin_hand_swap(first_player_id: int, second_player_id: int) -> void:
-	_pending_transfer_entries.clear()
+	# 双方原手牌快照；交牌内容只拥有这些UID，不遍历移动中的可变数组。
+	var entries: Array[Dictionary] = []
+	# 第一方原手牌身份；接收者固定为第二方。
 	for card_uid: int in _host.get_hand_card_uids(first_player_id):
-		_pending_transfer_entries.append({"card_uid":card_uid, "receiver_id":second_player_id, "reason":"opportunity_hand_swap"})
+		entries.append({"card_uid":card_uid, "receiver_id":second_player_id, "reason":"opportunity_hand_swap"})
+	# 第二方原手牌身份；首张移动前即锁定，避免把刚收到的牌再次交回。
 	for card_uid: int in _host.get_hand_card_uids(second_player_id):
-		_pending_transfer_entries.append({"card_uid":card_uid, "receiver_id":first_player_id, "reason":"opportunity_hand_swap"})
+		entries.append({"card_uid":card_uid, "receiver_id":first_player_id, "reason":"opportunity_hand_swap"})
 	_host.add_log("%s与%s交换所有手牌。" % [_host.format_player_log_name(first_player_id), _host.format_player_log_name(second_player_id)])
-	_process_pending_transfers()
+	_start_transfer_steps(entries)
 
 
 ## 建立双方全部装备的两阶段交换；先把原装备全部移入处理区，再装入对方对应槽位。
 func _begin_equipment_swap(first_player_id: int, second_player_id: int) -> void:
-	_pending_equipment_evacuation_entries = _host.get_equipment_swap_entries(first_player_id, second_player_id)
-	_pending_equipment_install_entries.clear()
+	# 原装备身份与双方代次；分阶段移动不接纳等待期间出现的替代牌。
+	var entries: Array[Dictionary] = _host.get_equipment_swap_entries(first_player_id, second_player_id)
+	# 有限交换步骤；全部离区完成后才逐张安装，后置结束后只通知一次。
+	var steps: Array[Callable] = []
+	for entry: Dictionary in entries:
+		entry["source_generation"] = _state.get_player(int(entry.source_player_id)).character_generation
+		entry["target_generation"] = _state.get_player(int(entry.target_player_id)).character_generation
+		steps.append(_evacuate_equipment_step.bind(entry.duplicate(true)))
+		steps.append(_record_equipment_evacuation.bind(int(entry.card_uid)))
+	for entry: Dictionary in entries:
+		steps.append(_install_swapped_equipment_step.bind(entry.duplicate(true)))
+		steps.append(_finish_swapped_equipment_step.bind(int(entry.card_uid)))
+	steps.append(_complete_effect_step)
 	_host.add_log("%s与%s交换装备区内的所有牌。" % [_host.format_player_log_name(first_player_id), _host.format_player_log_name(second_player_id)])
-	_process_equipment_swap()
+	_host.run_rule_sequence(steps, {"sequence_kind":"opportunity_equipment_swap", "evacuated_uids":[]})
 
 
-## 推进装备交换的清空与安装阶段；任何装备离区触发先完整结算，再处理下一张实体。
-func _process_equipment_swap() -> void:
-	while not _pending_equipment_evacuation_entries.is_empty():
-		# 当前清空条目；成功移入处理区后才加入安装队列。
-		var evacuation_entry: Dictionary = _pending_equipment_evacuation_entries.pop_front()
-		# 外层恢复点；木牛附属牌、白银狮子回复及失去装备技能先完成后再清空下一槽。
-		var evacuation_guard_id: int = _host.begin_opportunity_resolution_guard()
-		if _host.move_equipment_card_to_processing(int(evacuation_entry.get("source_player_id", -1)), int(evacuation_entry.get("card_uid", -1)), "opportunity_equipment_swap"):
-			_pending_equipment_install_entries.append(evacuation_entry.duplicate(true))
-		if _host.has_nested_settlement_barrier():
-			return
-		_host.cancel_opportunity_resolution_guard(evacuation_guard_id)
-	while not _pending_equipment_install_entries.is_empty():
-		# 当前安装条目；目标槽取原槽位，使武器、防具、坐骑与宝物类别保持不变。
-		var install_entry: Dictionary = _pending_equipment_install_entries.pop_front()
-		# 外层恢复点；装备进入时机与新持续实例全部完成后再安装下一张。
-		var install_guard_id: int = _host.begin_opportunity_resolution_guard()
-		_host.move_processing_card_to_equipment(int(install_entry.get("target_player_id", -1)), int(install_entry.get("card_uid", -1)), str(install_entry.get("slot", "")), "opportunity_equipment_swap")
-		if _host.has_nested_settlement_barrier():
-			return
-		_host.cancel_opportunity_resolution_guard(install_guard_id)
-	_system.complete_current_effect()
+## 原来源代次保持一致时才尝试离区；白银狮子回复和木牛清粮由移牌子内容等待。
+func _evacuate_equipment_step(sequence: RuleStepSequence, entry: Dictionary) -> void:
+	sequence.effect_result = null
+	# 原装备持有者；换将时不能处理其新武将区域。
+	var source: PlayerState = _state.get_player(int(entry.source_player_id))
+	if source != null and source.character_generation == int(entry.source_generation):
+		sequence.effect_result = _host.move_equipment_card_to_processing(source.player_id, int(entry.card_uid), "opportunity_equipment_swap")
+
+
+## 只记录真实移入处理区且完整结束的成员；被取消的源装备不进入安装列表。
+func _record_equipment_evacuation(sequence: RuleStepSequence, card_uid: int) -> void:
+	if sequence.effect_result != null and sequence.effect_result.count == 1:
+		(sequence.context.evacuated_uids as Array).append(card_uid)
+
+
+## 原目标代次与处理区身份都有效时安装；占用或废除的栏位不覆盖现有实体。
+func _install_swapped_equipment_step(sequence: RuleStepSequence, entry: Dictionary) -> void:
+	sequence.effect_result = null
+	if not (sequence.context.evacuated_uids as Array).has(int(entry.card_uid)):
+		return
+	# 原接收者；死亡、离场和代次由移动服务继续校验。
+	var target: PlayerState = _state.get_player(int(entry.target_player_id))
+	if target != null and target.character_generation == int(entry.target_generation):
+		sequence.effect_result = _host.move_processing_card_to_equipment(target.player_id, int(entry.card_uid), str(entry.slot), "opportunity_equipment_swap")
+
+
+## 已离区而未装入的成员按普通处理区回收结算；不强制搬牌或清空原角色数组。
+func _finish_swapped_equipment_step(sequence: RuleStepSequence, card_uid: int) -> void:
+	if not (sequence.context.evacuated_uids as Array).has(card_uid):
+		return
+	# 成员当前区域；After中被技能取得的牌不再回收。
+	var location: Dictionary = _host.get_card_location_snapshot(card_uid)
+	if str(location.get("zone", "")) == "processing":
+		_host._begin_single_discard(card_uid, -1, ["processing"], -2, "equipment_swap_discard")
+
 
 
 ## 让机缘拥有者选择自己区域内任意张可弃置牌，实际弃置后摸等量牌。
@@ -479,11 +484,9 @@ func _begin_discard_own_zone_and_draw(owner_player_id: int, card_definition: Dic
 				selected_uids.append(int(candidate.get("uid", -1)))
 		# 外层恢复点；AI弃牌与等量摸牌使用和真人提交完全相同的嵌套顺序。
 		var continuation_guard_id: int = _host.begin_opportunity_resolution_guard()
-		var discarded_count: int = _host.discard_selected_player_cards(owner_player_id, selected_uids, owner_player_id)
-		if discarded_count > 0 and _host.has_nested_settlement_barrier():
-			_pending_draw_after_discard = {"player_id":owner_player_id, "count":discarded_count}
-			return
-		_host.draw(owner_player_id, discarded_count, true, true)
+		_host.discard_selected_player_cards(owner_player_id, selected_uids, owner_player_id, func(discarded_count: int) -> void:
+			_host.draw(owner_player_id, discarded_count, true, true)
+		)
 		if _host.has_nested_settlement_barrier():
 			return
 		_host.cancel_opportunity_resolution_guard(continuation_guard_id)
@@ -584,11 +587,7 @@ func _begin_zone_card_choice(owner_player_id: int, target_player_id: int, operat
 			selected_uids.append(int(candidate.get("uid", -1)))
 			if selected_uids.size() >= required_count:
 				break
-		if operation == "discard_two":
-			_host.discard_selected_player_cards(target_player_id, selected_uids, owner_player_id)
-		else:
-			_host.take_selected_player_card(owner_player_id, target_player_id, selected_uids[0])
-		_system.complete_current_effect()
+		_run_zone_operation(owner_player_id, target_player_id, operation, selected_uids)
 		return
 	# 区域选择标题；明确区分弃置与获得，正文数量与机缘规则一致。
 	var title: String = "选择弃置牌" if operation == "discard_two" else "选择获得牌"
@@ -682,3 +681,35 @@ func _choose_ai_targets(owner_player_id: int, target_ids: Array[int], effect_id:
 			if result.size() >= minimum_count:
 				break
 	return result
+
+
+## 无后续选择的机缘效果也按内容步骤等待；摸牌/获得/回复结束后才授技与推进队列。
+func _run_effect_with_completion(effect: Callable, after: Callable = Callable()) -> void:
+	# 明确父子边界；完成调用不再通过全局“当前有没有选牌”猜测子操作是否结束。
+	var steps: Array[Callable] = [
+		func(_sequence: RuleStepSequence) -> void: effect.call(),
+		func(_sequence: RuleStepSequence) -> void:
+			if after.is_valid():
+				after.call(),
+		func(_sequence: RuleStepSequence) -> void: _system.complete_current_effect(),
+	]
+	_host.run_rule_sequence(steps)
+
+
+## 机缘的单目标体力变化；实际数值在结算时读取，统一结果负责前置取消和角色代次。
+func _change_target_health(effect_id: String, source_id: int, target_id: int, count: int) -> void:
+	# 当前目标；目标已死亡或不存在时通用效果自然空完成。
+	var target: PlayerState = _state.get_player(target_id)
+	if target == null:
+		return
+	match effect_id:
+		"max_hp_target":
+			_host.change_max_hp(target_id, count, source_id, "opportunity")
+		"lose_hp_target":
+			_host.lose_hp(source_id, target_id, count, "opportunity")
+		"lose_half_hp_target":
+			# 目标结算时当前体力的一半并向上取整；正数体力使用整数公式(hp+1)/2。
+			_host.lose_hp(source_id, target_id, ceili(float(maxi(target.hp, 0)) / 2.0), "opportunity")
+		"reduce_half_max_hp_target":
+			# 减少值按结算时体力上限的一半向上取整，最终仍由通用端口保证体力上限最低为1。
+			_host.change_max_hp(target_id, -ceili(float(maxi(target.max_hp, 0)) / 2.0), source_id, "opportunity")

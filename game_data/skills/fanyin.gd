@@ -114,9 +114,13 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 		if response.confirmed and response.card_ids.size() == 1:
 			# 黑色效果目标；等待期间该角色可能已死亡或手牌被清空，只有实际弃置成功才记录发动。
 			var black_target_id: int = int(context.get("target_id", -1))
-			if int(host.call("discard_selected_hand_cards", black_target_id, _int_array(response.card_ids))) > 0:
-				announce_activation({"effect":"black", "target_id":black_target_id, "discard_batch_id":int(context.get("batch_id", -1))})
-		_finish_batch(int(context.get("batch_id", -1)))
+			host.call("discard_selected_hand_cards", black_target_id, _int_array(response.card_ids), func(discarded_count: int) -> void:
+				if discarded_count > 0:
+					announce_activation({"effect":"black", "target_id":black_target_id, "discard_batch_id":int(context.get("batch_id", -1))})
+				_finish_batch(int(context.get("batch_id", -1)))
+			)
+		else:
+			_finish_batch(int(context.get("batch_id", -1)))
 		return true
 	return false
 
@@ -127,10 +131,13 @@ func _execute_section(card_uid: int, expected_section_index: int) -> bool:
 		return false
 	# 单张费用UID数组；显式强类型保证动态控制器调用与公开端口签名一致。
 	var selected_uids: Array[int] = [card_uid]
-	if int(host.call("discard_selected_hand_equipment", owner_player_id, selected_uids)) != 1:
-		return false
-	announce_activation({"section_number":expected_section_index + 1, "round_count":get_reincarnation_round_count(), "discarded_card_uid":card_uid})
-	complete_reincarnation_activation()
+	host.call("discard_selected_hand_equipment", owner_player_id, selected_uids, func(discarded_count: int) -> void:
+		if discarded_count <= 0:
+			cancel_reincarnation_activation()
+			return
+		announce_activation({"section_number":expected_section_index + 1, "round_count":get_reincarnation_round_count(), "discarded_card_uid":card_uid})
+		complete_reincarnation_activation()
+	)
 	return true
 
 

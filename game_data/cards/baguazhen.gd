@@ -87,8 +87,11 @@ func consume_equipment_response(match_host: Object, player_id: int, equipment_ui
 		"favorable_result_player_values":{str(player_id):AI_SUCCESS_RESULT_VALUE},
 	}
 	# 八卦阵判定牌；没有判定前交互时同步返回，出现【戏法】等选择时由 continue_judgment 恢复原响应。
-	var judgment_card: CardInstance = match_host.request_judgment(player_id, "八卦阵", judgment_continuation, judgment_ai_context)
-	if match_host.has_pending_judgment_request():
+	# 本次判定结果对象；外层判定仍活动时也只查询自己的完成状态。
+	var judgment_resolution: RefCounted = match_host.begin_judgment_resolution(player_id, "八卦阵", judgment_continuation, judgment_ai_context)
+	# 保留原判定牌变量；只有本次结果完成后才继续应用。
+	var judgment_card: CardInstance = judgment_resolution.result as CardInstance
+	if not judgment_resolution.completed:
 		return null
 	return _build_bagua_response(match_host, player_id, judgment_card, response_context)
 

@@ -178,10 +178,15 @@ func _execute_shield_section(target_id: int) -> bool:
 	if not can_activate() or get_reincarnation_section_index() != SHIELD_SECTION_INDEX or not _get_shield_target_ids().has(target_id) or not begin_reincarnation_activation():
 		return false
 	# 实际获得量；护盾上限或免疫规则可能使其低于请求值，但本节仍然照常完成。
-	var granted_shield: int = get_skill_player(target_id).shield(SHIELD_AMOUNT, get_owner_skill_player())
-	announce_activation({"section_number":SHIELD_SECTION_INDEX + 1, "round_count":get_reincarnation_round_count(), "target_id":target_id, "target_ids":[target_id], "shield":granted_shield})
-	observe_identity_behavior([target_id], {"target_result":1.0})
-	complete_reincarnation_activation()
+	run_steps([
+		func(sequence: RuleStepSequence) -> void: sequence.effect_result = get_skill_player(target_id).shield(SHIELD_AMOUNT, get_owner_skill_player()),
+		func(sequence: RuleStepSequence) -> void:
+			# 实际获得量；完整护盾后置结束后再推进轮回节。
+			var granted_shield: int = sequence.effect_result.count if sequence.effect_result != null else 0
+			announce_activation({"section_number":SHIELD_SECTION_INDEX + 1, "round_count":get_reincarnation_round_count(), "target_id":target_id, "target_ids":[target_id], "shield":granted_shield})
+			observe_identity_behavior([target_id], {"target_result":1.0})
+			complete_reincarnation_activation()
+	])
 	return true
 
 
@@ -191,10 +196,13 @@ func _execute_discard_hand_section(card_uid: int) -> bool:
 		return false
 	# 单张费用UID数组；显式强类型保证动态控制器调用与公开端口签名一致。
 	var selected_uids: Array[int] = [card_uid]
-	if int(host.call("discard_selected_hand_cards", owner_player_id, selected_uids)) != DISCARD_HAND_COUNT:
-		return false
-	announce_activation({"section_number":DISCARD_HAND_SECTION_INDEX + 1, "round_count":get_reincarnation_round_count(), "discarded_card_uid":card_uid})
-	complete_reincarnation_activation()
+	host.call("discard_selected_hand_cards", owner_player_id, selected_uids, func(discarded_count: int) -> void:
+		if discarded_count != DISCARD_HAND_COUNT:
+			cancel_reincarnation_activation()
+			return
+		announce_activation({"section_number":DISCARD_HAND_SECTION_INDEX + 1, "round_count":get_reincarnation_round_count(), "discarded_card_uid":card_uid})
+		complete_reincarnation_activation()
+	)
 	return true
 
 
@@ -202,11 +210,16 @@ func _execute_discard_hand_section(card_uid: int) -> bool:
 func _execute_discard_zone_section(target_id: int, card_uid: int) -> bool:
 	if not can_activate() or get_reincarnation_section_index() != DISCARD_ZONE_SECTION_INDEX or not _get_zone_target_ids().has(target_id) or not _candidate_uids(_get_zone_card_candidates(target_id)).has(card_uid) or not begin_reincarnation_activation():
 		return false
-	if not bool(host.call("discard_selected_player_card", owner_player_id, target_id, card_uid)):
-		return false
-	announce_activation({"section_number":DISCARD_ZONE_SECTION_INDEX + 1, "round_count":get_reincarnation_round_count(), "target_id":target_id, "target_ids":[target_id], "discarded_card_uid":card_uid})
-	observe_identity_behavior([target_id], {"target_result":-1.0})
-	complete_reincarnation_activation()
+	run_steps([
+		func(sequence: RuleStepSequence) -> void: sequence.effect_result = host.discard_selected_player_card(owner_player_id, target_id, card_uid),
+		func(sequence: RuleStepSequence) -> void:
+			if sequence.effect_result == null or sequence.effect_result.count <= 0:
+				cancel_reincarnation_activation()
+				return
+			announce_activation({"section_number":DISCARD_ZONE_SECTION_INDEX + 1, "round_count":get_reincarnation_round_count(), "target_id":target_id, "target_ids":[target_id], "discarded_card_uid":card_uid})
+			observe_identity_behavior([target_id], {"target_result":-1.0})
+			complete_reincarnation_activation(),
+	])
 	return true
 
 

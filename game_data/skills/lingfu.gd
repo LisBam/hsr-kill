@@ -13,8 +13,7 @@ extends SkillDefinition
 ## 若“出牌阶段限一次”是唯一限制，“每种类别限一次”的全局约束永远不会被触达，原文的注意条款就没有意义。
 ##
 ## 操作顺序（用户明确要求）：一次交互内同时选择一张牌与一个目标，按下确定后**先重铸**，然后才触发后续效果。
-## 该顺序由 defer_settlement 保证：重铸的补摸登记在 `_rule_continuations` 上，
-## 而结算管线先排空 `_rule_continuations` 再回调 `continue_settlement`。
+## 该顺序由run_steps及费用子内容归属保证：补摸和所有子触发结束后，才执行授予步骤。
 
 ## 本技能稳定ID；授予与失去都按该 ID 判定。
 const LINGFU_SKILL_ID: String = "lingfu"
@@ -24,9 +23,6 @@ const MEIZHAN_SKILL_ID: String = "meizhan"
 
 ## 组合选择请求的业务键；continue_selection 按它分流。
 const CHOICE_KIND: String = "lingfu_grant_target"
-
-## 续结算业务键；重铸完成后按它恢复后续效果。
-const SETTLEMENT_KIND: String = "lingfu_after_recast"
 
 ## 全局限次记录在 PlayerState.character_form_state 中的稳定键名；值类型为 Array[String]。
 const USED_CATEGORIES_KEY: String = "lingfu_used_card_categories"
@@ -204,28 +200,31 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 	var cost_card: CardInstance = owner.find_hand_card(response.card_ids[0])
 	if cost_card == null or not _has_category_quota(cost_card.definition_id):
 		return true
-	# 先重铸；返回 false（牌已离手等）表示费用未支付，此时不记账也不进入后续效果。
-	if not bool(host.call("recast_hand_card", owner_player_id, cost_card.uid)):
-		return true
-	# 记账时机严格在重铸成功之后：全局类别额度只被真实发生的重铸消耗。
-	_mark_used_category(_get_card_category(cost_card.definition_id))
-	_used_this_play_phase = true
-	announce_activation({"target_id":target.player_id, "recast_definition_id":cost_card.definition_id})
-	# 后续效果登记到延后结算队列：重铸的补摸属于规则续接，结算管线先排空它再回调 continue_settlement，
-	# 因此“先重铸（含补摸）、后授予技能或升级”这一顺序得到严格保证。
-	if defer_settlement({"kind":SETTLEMENT_KIND, "target_id":target.player_id}):
-		return true
-	# 兜底：登记失败（技能代次失效等）时同步执行后续效果，保证效果不丢失。
-	_resolve_grant(target.player_id)
+	# 跨等待只保存费用牌面与原目标代次，不能把收益发给替换后的武将。
+	var cost_uid: int = cost_card.uid
+	# 费用的类别来源；实体离手后的视为清理不会改变本次记录。
+	var cost_definition_id: String = cost_card.definition_id
+	# 原目标身份与代次；后续授予前再次校验。
+	var target_id: int = target.player_id
+	# 目标代次快照；换将后本次后续失效。
+	var target_generation: int = target.character_generation
+	run_steps([
+		func(sequence: RuleStepSequence) -> void: sequence.effect_result = host.recast_hand_card(owner_player_id, cost_uid),
+		func(sequence: RuleStepSequence) -> void:
+			if sequence.effect_result == null or sequence.effect_result.count <= 0:
+				sequence.finish()
+				return
+			_mark_used_category(_get_card_category(cost_definition_id))
+			_used_this_play_phase = true
+			announce_activation({"target_id":target_id, "recast_definition_id":cost_definition_id}),
+		func(_sequence: RuleStepSequence) -> void:
+			# 当前目标；费用已经成立，但换将或离场不得获得旧请求的后续。
+			var current_target: PlayerState = host.state.get_player(target_id)
+			if current_target != null and current_target.character_generation == target_generation:
+				_resolve_grant(target_id),
+	])
 	return true
 
-
-## 恢复重铸完成后的后续效果；上下文只携带稳定目标ID。
-func continue_settlement(context: Dictionary) -> bool:
-	if str(context.get("kind", "")) != SETTLEMENT_KIND:
-		return false
-	_resolve_grant(int(context.get("target_id", -1)))
-	return true
 
 
 ## 兑现后续效果：目标没有“梅绽”则授予；已拥有则升级其体力并令阮梅失去本技能。
@@ -238,9 +237,15 @@ func _resolve_grant(target_id: int) -> void:
 	if bool(host.call("has_skill", target_id, MEIZHAN_SKILL_ID)):
 		# 分支二：严格按原文顺序——先增加体力上限，再回复体力，最后阮梅失去本技能。
 		# change_max_hp 的 delta 为正不会触发濒死，recover 也不会超过上限。
-		host.call("change_max_hp", target_id, MAX_HP_GAIN, owner_player_id, LINGFU_SKILL_ID)
-		host.call("recover", owner_player_id, target_id, RECOVER_AMOUNT, LINGFU_SKILL_ID)
-		host.call("remove_skill", owner_player_id, LINGFU_SKILL_ID, LINGFU_SKILL_ID)
+		run_steps([
+			func(_sequence: RuleStepSequence) -> void: host.call("change_max_hp", target_id, MAX_HP_GAIN, owner_player_id, LINGFU_SKILL_ID),
+			func(sequence: RuleStepSequence) -> void:
+				# 等待后的原目标；不能向替换后的武将兑现旧回复。
+				var current_target: PlayerState = host.state.get_player(target_id)
+				if current_target != null and current_target.character_generation == int(sequence.context.target_generation):
+					host.call("recover", owner_player_id, target_id, RECOVER_AMOUNT, LINGFU_SKILL_ID),
+			func(_sequence: RuleStepSequence) -> void: host.call("remove_skill", owner_player_id, LINGFU_SKILL_ID, LINGFU_SKILL_ID),
+		], {"target_generation":target.character_generation})
 		return
 	# 分支一：永久授予，无次数限制也无回合限制；端口自身拒绝重复授予，因此无需处理返回值。
 	host.call("grant_acquired_skill", target_id, MEIZHAN_SKILL_ID, 0, 0, GRANT_SOURCE)
