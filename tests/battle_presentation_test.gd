@@ -77,6 +77,9 @@ func _run() -> void:
 	var snapshot_before: Dictionary = snapshot.duplicate(true)
 	controller.state_changed.emit(snapshot)
 	await _settle()
+	# 对局时长每秒更新；不应挂载文字位移动画，牌堆文字仍保留反馈。
+	_check(not main.get_node("%CenterPhaseLabel").has_node("TextMotion"), "对局时长不应随文本更新跳动")
+	_check(main.get_node("%CenterTurnLabel").has_node("TextMotion"), "牌堆文字反馈应保持启用")
 	# 正式对手视图；选中反馈不依赖独立样例或假牌面。
 	var target: PlayerTargetView = (main.get("_player_views") as Dictionary).get(1) as PlayerTargetView
 	# 正式手牌；后续同时验证选择和原实体拖动。

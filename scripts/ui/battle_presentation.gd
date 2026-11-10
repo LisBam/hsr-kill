@@ -12,7 +12,7 @@ const SURFACE_MOTION: Script = preload("res://scripts/ui/ui_surface_motion.gd")
 ## 原生范围控件样式；统一滑条和内置滚动条，不修改玩家设置值。
 const RANGE_STYLE: Script = preload("res://scripts/ui/ui_range_style.gd")
 ## HUD文字路径；允许检查器增减需要轻量反馈的Label，运行时通常不调整。
-@export var text_paths: Array[NodePath] = [NodePath("%CenterTurnLabel"), NodePath("%CenterPhaseLabel"), NodePath("%InteractionGuideLabel"), NodePath("%SelectionLabel"), NodePath("%ErrorLabel")]
+@export var text_paths: Array[NodePath] = [NodePath("%CenterTurnLabel"), NodePath("%InteractionGuideLabel"), NodePath("%SelectionLabel"), NodePath("%ErrorLabel")]
 ## HUD可见性分组路径；只做淡入，避免抬动包含实体牌的区域。
 @export var surface_paths: Array[NodePath] = [NodePath("InteractionPanel"), NodePath("SkillBar")]
 ## 本次场景的根节点；不查找全局单例，测试场景可独立挂载。
