@@ -5,6 +5,9 @@ extends Node
 ## 整个踢出重连流程的超时秒数；默认14秒覆盖两次握手、5秒冷却和可靠拒绝消息。
 const TEST_TIMEOUT_SECONDS: float = 14.0
 
+## 首次派生引擎进程加载项目的独立预算；默认30秒，只用于房主等待首个握手，不计入踢出协议的14秒验证。
+const CLIENT_STARTUP_TIMEOUT_SECONDS: float = 30.0
+
 ## 冷却结束后的额外等待秒数；默认0.25秒避免单调时钟刚好处于5秒边界时产生偶发失败。
 const COOLDOWN_SETTLE_SECONDS: float = 0.25
 
@@ -84,6 +87,8 @@ func _on_lobby_changed(lobby_snapshot: Dictionary) -> void:
 	if int(lobby_snapshot.get("member_count", 0)) < 2:
 		return
 	if not _kick_sent:
+		# 首次握手后重启协议计时；冷启动加载速度不能消耗实际5秒冷却与重连的验证预算。
+		_timeout_timer.start(TEST_TIMEOUT_SECONDS)
 		# 当前远端成员 peer；房主固定为1，找到首个大于1的成员后执行一次真实踢出。
 		var remote_peer_id: int = 0
 		for member_variant: Variant in lobby_snapshot.get("members", []) as Array:
@@ -136,7 +141,7 @@ func _rejoin_after_cooldown() -> void:
 func _install_timeout() -> void:
 	_timeout_timer = Timer.new()
 	_timeout_timer.one_shot = true
-	_timeout_timer.wait_time = TEST_TIMEOUT_SECONDS
+	_timeout_timer.wait_time = TEST_TIMEOUT_SECONDS if _is_client_process else CLIENT_STARTUP_TIMEOUT_SECONDS
 	_timeout_timer.timeout.connect(func() -> void: _fail("timeout"))
 	add_child(_timeout_timer)
 	_timeout_timer.start()
