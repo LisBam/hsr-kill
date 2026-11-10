@@ -7,6 +7,9 @@ const SURFACE_MOTION: Script = preload("res://scripts/ui/ui_surface_motion.gd")
 ## 局内外壳样式；只组织面板与按钮层次，不改变规则语义色和内容尺寸。
 const BATTLE_STYLE: Script = preload("res://scripts/ui/battle_surface_style.gd")
 
+## 座次与身份选中按钮的固定字体色；纯白避免文字与强调底色重合，所有交互状态统一使用。
+const SELECTED_ASSIGNMENT_FONT_COLOR: Color = Color.WHITE
+
 ## 选将界面组件。该组件只渲染观察者可见候选、临时高亮和确认进度，通过稳定武将 ID 发出选择请求。
 
 ## 玩家确认武将时发出的信号；参数为稳定武将配置 ID，不携带节点或配置引用。
@@ -1320,10 +1323,13 @@ func _apply_assignment_button_style(button: Button, border_color: Color, selecte
 	var background_color: Color = BattleUIStyle.get_color("action_button").lerp(border_color, 0.34) if selected else BattleUIStyle.get_color("action_button")
 	BATTLE_STYLE.apply_interaction_button(button, background_color, border_color, selected)
 	if selected:
-		button.add_theme_color_override("font_color", border_color)
-		button.add_theme_color_override("font_hover_color", border_color.lightened(0.12))
-		button.add_theme_color_override("font_pressed_color", border_color.lightened(0.18))
-		button.add_theme_color_override("font_focus_color", border_color)
+		# 已选按钮的底色承载座次或身份语义；各态文字固定白色，悬停按下也不能回退到同色字体。
+		button.add_theme_color_override("font_color", SELECTED_ASSIGNMENT_FONT_COLOR)
+		button.add_theme_color_override("font_hover_color", SELECTED_ASSIGNMENT_FONT_COLOR)
+		button.add_theme_color_override("font_pressed_color", SELECTED_ASSIGNMENT_FONT_COLOR)
+		button.add_theme_color_override("font_hover_pressed_color", SELECTED_ASSIGNMENT_FONT_COLOR)
+		button.add_theme_color_override("font_focus_color", SELECTED_ASSIGNMENT_FONT_COLOR)
+		button.add_theme_color_override("font_disabled_color", SELECTED_ASSIGNMENT_FONT_COLOR)
 	else:
 		button.add_theme_color_override("font_focus_color", BattleUIStyle.get_color("button_font"))
 
