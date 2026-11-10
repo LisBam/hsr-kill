@@ -5,6 +5,7 @@
 [ext_resource type="PackedScene" path="res://scenes/components/judgment_zone_view.tscn" id="3_judgment_zone"]
 [ext_resource type="PackedScene" path="res://scenes/components/player_state_overlay.tscn" id="4_state_overlay"]
 [ext_resource type="Script" uid="uid://c457efv3cv7c2" path="res://scripts/ui/damage_shake_feedback.gd" id="5_damage_feedback"]
+[ext_resource type="Script" path="res://scripts/ui/character_card_finish.gd" id="6_card_finish"]
 
 [sub_resource type="StyleBoxFlat" id="StyleRootNormal"]
 content_margin_left = 4.0
@@ -179,6 +180,9 @@ text = "◇
 武将插画预留"
 horizontal_alignment = 1
 vertical_alignment = 1
+
+[node name="CardFinish" type="Node2D" parent="."]
+script = ExtResource("6_card_finish")
 
 [node name="CharacterName" type="Label" parent="." unique_id=673259262]
 unique_name_in_owner = true

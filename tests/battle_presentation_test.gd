@@ -45,7 +45,7 @@ func _make_snapshot() -> Dictionary:
 	# 八名角色公开快照；顺序固定，便于比较主题和窗口的渲染结果。
 	var players: Array[Dictionary] = []
 	# 已登记武将；选择已有素材的角色，不能从测试修改技能定义。
-	var characters: Array[String] = ["gepard", "sanyueqi", "natasha", "danheng", "gepard", "sanyueqi", "natasha", "danheng"]
+	var characters: Array[String] = ["gepard", "march_7th", "natasha", "dan_heng", "gepard", "march_7th", "natasha", "dan_heng"]
 	# 本地可见手牌；普通牌与装备均使用数据库中的真实定义。
 	var hand: Array[Dictionary] = []
 	for index: int in range(6):
@@ -57,6 +57,8 @@ func _make_snapshot() -> Dictionary:
 
 ## 集中覆盖表现组件和真实窗口；每个操作只等待一次有限动画。
 func _run() -> void:
+	# 本测试通过正式接口和信号驱动界面；关闭真实GUI鼠标输入，避免弹窗收起时的mouse_entered覆盖合成悬停来源。
+	get_viewport().gui_disable_input = true
 	GameSettings.set("_settings_file_path", "res://.godot/battle_presentation_test.cfg")
 	await GameDatabase.wait_until_ready()
 	# 正式场景实例；禁止控制器自动发起随机对局，全部测试只消费公开夹具。
@@ -102,8 +104,8 @@ func _run() -> void:
 	await _capture("01_battle_selected")
 	# 选将使用同一武将牌；被选项不能再出现覆盖插画的大字。
 	var character_selection: CharacterSelectionPanel = main.get_node("CharacterSelectionPanel") as CharacterSelectionPanel
-	character_selection.bind_snapshot({"phase":"leader_selecting", "can_select":true, "local_candidates":["gepard", "sanyueqi", "natasha", "danheng"], "local_identity":"leader", "local_seat_number":1})
-	character_selection.call("_select_candidate", "sanyueqi")
+	character_selection.bind_snapshot({"phase":"leader_selecting", "can_select":true, "local_candidates":["gepard", "march_7th", "natasha", "dan_heng"], "local_identity":"leader", "local_seat_number":1})
+	character_selection.call("_select_candidate", "march_7th")
 	await _settle()
 	await _capture("01a_character_selection")
 	character_selection.close()
