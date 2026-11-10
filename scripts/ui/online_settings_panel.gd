@@ -9,6 +9,9 @@ signal close_requested()
 ## 正式武将牌场景；联机形象选择与选将、局内角色牌复用同一插画和主题渲染组件。
 const PLAYER_TARGET_VIEW_SCENE: PackedScene = preload("res://scenes/components/player_target_view.tscn")
 
+## 列表未准备完成时覆盖形象区域的共用组件；保留页面其他操作。
+const GALLERY_LOADING_COVER_SCRIPT: Script = preload("res://scripts/ui/gallery_loading_cover.gd")
+
 ## 每行显示的武将牌数量；默认5张可在右侧详情区内保留舒适间距，运行时一般无需动态修改。
 @export_range(1, 8, 1) var avatar_columns: int = 5
 
@@ -20,6 +23,13 @@ const PLAYER_TARGET_VIEW_SCENE: PackedScene = preload("res://scenes/components/p
 
 ## 相邻武将牌行之间的垂直间距；默认16像素避免选中描边与下一行牌面相交，运行时只影响资料面板布局。
 @export_range(0.0, 48.0, 1.0) var avatar_vertical_gap: float = 16.0
+
+## 每帧最多创建的可见形象牌数量；默认2张减少卡顿，运行时可按设备性能调整。
+## 补充：当前默认4张，优先准备当前屏，再填充上下缓冲区。
+@export_range(1, 8, 1) var visible_views_per_frame: int = 4
+
+## 视口上下提前准备的屏幕高度倍数；默认2倍，运行时可按设备内存调整。
+@export_range(0.0, 5.0, 0.5) var prefetch_viewport_count: float = 2.0
 
 ## 右侧详情区遮罩透明度；默认0.18与模式选择预览遮罩一致，运行时只影响视觉明暗。
 @export_range(0.0, 1.0, 0.01) var detail_shade_opacity: float = 0.18
@@ -88,9 +98,57 @@ var _selected_character_id: String = ""
 var _avatar_views: Dictionary = {}
 
 
+## 已构建候选的内容与布局签名；默认-1表示尚未构建，可检测数据库重载和检查器参数变化。
+var _avatar_cache_signature: int = -1
+
+## 形象滚动区等待遮罩；当前屏准备完成后隐藏，名称和页面导航保持可用。
+var _loading_cover: ColorRect
+
+
+## 按滚动位置逐帧创建附近的形象牌，离开视口后释放牌面并保留选择数据。
+## 补充：已创建形象牌现在缓存至目录或布局失效，滚回时直接复用。
+func _process(_delta: float) -> void:
+	if not is_visible_in_tree():
+		return
+	# 本帧剩余创建额度；优先处理当前可视区域，再准备上下缓冲区。
+	var remaining: int = visible_views_per_frame
+	# 当前滚动视口边界；额外预取多个屏幕以减少快速滚动时等待。
+	var top: float = _avatar_scroll.scroll_vertical
+	var bottom: float = top + _avatar_scroll.size.y
+	var margin: float = _avatar_scroll.size.y * prefetch_viewport_count
+	for pass_index: int in range(2):
+		for slot: Node in _avatar_content.get_children():
+			if not slot is Control:
+				continue
+			# 当前形象槽和已创建的牌面；已访问牌面持续缓存至目录失效。
+			var avatar_slot: Control = slot as Control
+			var character_id: String = str(avatar_slot.get_meta("character_id"))
+			if is_instance_valid(_avatar_views.get(character_id)):
+				continue
+			# 第一轮优先当前屏，第二轮处理上下缓冲范围。
+			var in_viewport: bool = avatar_slot.position.y + avatar_slot.size.y > top and avatar_slot.position.y < bottom
+			var in_buffer: bool = avatar_slot.position.y + avatar_slot.size.y > top - margin and avatar_slot.position.y < bottom + margin
+			if remaining > 0 and ((pass_index == 0 and in_viewport) or (pass_index == 1 and in_buffer)):
+				_create_avatar_view(avatar_slot)
+				remaining -= 1
+	# 当前屏有未完成牌面时保持遮罩；已缓存牌面不会重复创建。
+	var viewport_pending: bool = false
+	for slot: Node in _avatar_content.get_children():
+		if not slot is Control:
+			continue
+		var avatar_slot: Control = slot as Control
+		var character_id: String = str(avatar_slot.get_meta("character_id"))
+		if avatar_slot.position.y + avatar_slot.size.y > top and avatar_slot.position.y < bottom and not is_instance_valid(_avatar_views.get(character_id)):
+			viewport_pending = true
+			break
+	_loading_cover.call("set_loading", viewport_pending, _avatar_scroll)
+
+
 ## 初始化资料面板信号与主题监听；组件默认隐藏，只有主菜单顶部“联机设置”内容页被选中后才接收输入。
 func _ready() -> void:
 	visible = false
+	_loading_cover = GALLERY_LOADING_COVER_SCRIPT.new() as ColorRect
+	add_child(_loading_cover)
 	_backdrop.visible = false
 	_backdrop.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_player_name_input.max_length = GameSettings.MAX_ONLINE_PLAYER_NAME_LENGTH
@@ -106,6 +164,7 @@ func _ready() -> void:
 func open_panel() -> void:
 	visible = true
 	move_to_front()
+	_loading_cover.call("set_loading", true, _avatar_scroll)
 	_player_name_input.text = GameSettings.online_player_name
 	_player_name_input.caret_column = _player_name_input.text.length()
 	_rebuild_avatar_options()
@@ -148,12 +207,22 @@ func refresh_ui_style() -> void:
 ## 从数据库全部现有武将重建形象候选；显示顺序按中文名称稳定排序，新增武将无需修改本组件。
 ## 补充：当前先按需求指定的势力顺序分组，再在同一势力内按中文名称稳定排序。
 func _rebuild_avatar_options() -> void:
-	_clear_avatar_options()
 	# 当前已登记武将 ID；复制后按显示名排序，避免直接依赖数据库字典遍历顺序。
 	var character_ids: Array[String] = []
 	for character_id_variant: Variant in GameDatabase.characters.keys():
 		character_ids.append(str(character_id_variant))
 	character_ids.sort_custom(_sort_character_ids_by_name)
+	# 内容版本与布局参数组成缓存签名；数据库重载或检查器调整后重建候选。
+	var next_cache_signature: int = hash([GameDatabase.content_revision, avatar_columns, avatar_card_scale, avatar_horizontal_gap, avatar_vertical_gap])
+	if next_cache_signature == _avatar_cache_signature and not character_ids.is_empty():
+		# 每次打开仍恢复已保存形象，取消未保存编辑不会被缓存保留。
+		var saved_id: String = GameSettings.online_avatar_character_id
+		_selected_character_id = saved_id if character_ids.has(saved_id) else character_ids[0]
+		_save_button.disabled = false
+		_update_avatar_selection()
+		return
+	_clear_avatar_options()
+	_avatar_cache_signature = next_cache_signature
 	if character_ids.is_empty():
 		_selected_character_id = ""
 		_selected_avatar_label.text = "当前形象：暂无可用武将牌"
@@ -164,8 +233,11 @@ func _rebuild_avatar_options() -> void:
 	var saved_character_id: String = GameSettings.online_avatar_character_id
 	_selected_character_id = saved_character_id if character_ids.has(saved_character_id) else character_ids[0]
 	_save_button.disabled = false
+	# 场景中配置的统一牌面尺寸；占位槽不创建完整牌面和插画。
+	var prototype: PlayerTargetView = PLAYER_TARGET_VIEW_SCENE.instantiate() as PlayerTargetView
 	# 第一张武将牌的缩放尺寸；全部候选复用同一正式场景规格，因此可作为统一布局基准。
-	var scaled_card_size: Vector2 = Vector2.ZERO
+	var scaled_card_size: Vector2 = prototype.card_size * avatar_card_scale
+	prototype.free()
 	for character_index: int in range(character_ids.size()):
 		# 当前稳定武将 ID；点击与保存只提交该值，牌面文本使用数据库本地化名称。
 		var character_id: String = character_ids[character_index]
@@ -176,37 +248,13 @@ func _rebuild_avatar_options() -> void:
 		# 当前候选占位容器；Control 负责滚动内容尺寸，武将牌根节点仍保持可复用的 Node2D 类型。
 		var avatar_slot: Control = Control.new()
 		avatar_slot.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		_avatar_content.add_child(avatar_slot)
-		# 当前正式武将牌；组件只渲染静态资料并发出点击，不创建玩家或对局状态。
-		var avatar_view: PlayerTargetView = PLAYER_TARGET_VIEW_SCENE.instantiate() as PlayerTargetView
-		avatar_slot.add_child(avatar_view)
-		avatar_view.scale = Vector2.ONE * avatar_card_scale
-		# 联机形象预览快照；只包含牌面渲染字段，不进入 GameState、网络快照或选将流程。
-		var avatar_snapshot: Dictionary = {
-			"player_id": character_index,
-			"display_name": "联机形象",
-			"character_id": character_id,
-			"character_revealed": true,
-			"identity": "hidden",
-			"hp": int(character_definition.get("max_hp", 4)),
-			"max_hp": int(character_definition.get("max_hp", 4)),
-			"alive": true,
-			"chained": false,
-			"hand_count": 0,
-			"equipment": {},
-			"judgment_area": [],
-			"wooden_ox_storage_count": 0,
-		}
-		avatar_view.configure_snapshot(avatar_snapshot, character_definition, false, faction_definition)
-		# 列表拖动手势；武将牌 Node2D 会拦截滚轮外的拖动，开启后才能在形象列表中纵向滚动。
-		avatar_view.set_scroll_gesture_enabled(true)
-		avatar_view.scroll_gesture_moved.connect(_on_avatar_scroll_gesture_moved)
-		avatar_view.pressed.connect(_select_avatar.bind(character_id))
-		_avatar_views[character_id] = avatar_view
-		if scaled_card_size == Vector2.ZERO:
-			scaled_card_size = avatar_view.card_size * avatar_card_scale
 		avatar_slot.size = scaled_card_size
 		avatar_slot.position = _resolve_avatar_slot_position(character_index, scaled_card_size)
+		avatar_slot.set_meta("character_id", character_id)
+		avatar_slot.set_meta("character_index", character_index)
+		avatar_slot.set_meta("definition", character_definition)
+		avatar_slot.set_meta("faction", faction_definition)
+		_avatar_content.add_child(avatar_slot)
 	# 实际行数；向上取整保证最后一行不完整时仍为全部候选保留滚动高度。
 	var row_count: int = ceili(float(character_ids.size()) / float(avatar_columns))
 	# 实际显示列数；武将不足一行时按真实数量收紧内容并保持整体居中。
@@ -217,6 +265,41 @@ func _rebuild_avatar_options() -> void:
 		row_count * scaled_card_size.y + maxi(row_count - 1, 0) * avatar_vertical_gap
 	)
 	_update_avatar_selection()
+
+
+## 为可见槽创建正式武将牌，选择状态来自面板数据而非节点生命周期。
+func _create_avatar_view(avatar_slot: Control) -> void:
+	# 当前武将资料；仅用于本地形象展示，不进入对局或网络状态。
+	var character_id: String = str(avatar_slot.get_meta("character_id"))
+	var character_definition: Dictionary = avatar_slot.get_meta("definition")
+	var faction_definition: Dictionary = avatar_slot.get_meta("faction")
+	# 联机形象预览快照；只包含牌面渲染字段，不进入 GameState、网络快照或选将流程。
+	var avatar_snapshot: Dictionary = {
+		"player_id": int(avatar_slot.get_meta("character_index")),
+		"display_name": "联机形象",
+		"character_id": character_id,
+		"character_revealed": true,
+		"identity": "hidden",
+		"hp": int(character_definition.get("max_hp", 4)),
+		"max_hp": int(character_definition.get("max_hp", 4)),
+		"alive": true,
+		"chained": false,
+		"hand_count": 0,
+		"equipment": {},
+		"judgment_area": [],
+		"wooden_ox_storage_count": 0,
+	}
+	# 当前正式武将牌；组件只渲染静态资料并发出点击，不创建玩家或对局状态。
+	var avatar_view: PlayerTargetView = PLAYER_TARGET_VIEW_SCENE.instantiate() as PlayerTargetView
+	avatar_slot.add_child(avatar_view)
+	avatar_view.scale = Vector2.ONE * avatar_card_scale
+	avatar_view.configure_snapshot(avatar_snapshot, character_definition, false, faction_definition)
+	# 列表拖动手势；武将牌 Node2D 会拦截滚轮外的拖动，开启后才能在形象列表中纵向滚动。
+	avatar_view.set_scroll_gesture_enabled(true)
+	avatar_view.scroll_gesture_moved.connect(_on_avatar_scroll_gesture_moved)
+	avatar_view.pressed.connect(_select_avatar.bind(character_id))
+	_avatar_views[character_id] = avatar_view
+	avatar_view.set_target_state(false, character_id == _selected_character_id)
 
 
 ## 按网格索引计算武将牌槽位左上角；列数与间距均来自导出参数，便于在检查器中微调布局。
@@ -269,7 +352,8 @@ func _update_avatar_selection() -> void:
 		var character_id: String = str(character_id_variant)
 		# 当前武将形象视图；选中的唯一牌面使用主题强调色描边。
 		var avatar_view: PlayerTargetView = _avatar_views[character_id] as PlayerTargetView
-		avatar_view.set_target_state(false, character_id == _selected_character_id)
+		if avatar_view.is_target_selected != (character_id == _selected_character_id):
+			avatar_view.set_target_state(false, character_id == _selected_character_id)
 	_selected_avatar_label.text = "当前形象：%s" % GameDatabase.resolve_character_name(_selected_character_id)
 
 

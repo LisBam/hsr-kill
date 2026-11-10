@@ -9,6 +9,9 @@ signal close_requested()
 ## 正式武将牌场景；图鉴复用牌桌与选将界面的同一牌面组件，避免维护第二套武将外观。
 const PLAYER_TARGET_VIEW_SCENE: PackedScene = preload("res://scenes/components/player_target_view.tscn")
 
+## 列表未准备完成时覆盖牌面区域的共用组件；不改变菜单导航。
+const GALLERY_LOADING_COVER_SCRIPT: Script = preload("res://scripts/ui/gallery_loading_cover.gd")
+
 ## 正式游戏牌场景；每种已登记定义只展示一张代表牌面，花色点数优先取牌堆中的首个实体配置。
 const CARD_VIEW_SCENE: PackedScene = preload("res://scenes/components/card_view.tscn")
 
@@ -73,6 +76,13 @@ const EXCLUSIVE_CARD_TAG_NAME: String = "专属"
 
 ## 相邻图鉴行之间的垂直间距；默认18像素保留牌面阴影和点击边界，只影响客户端布局。
 @export_range(0.0, 48.0, 1.0) var vertical_gap: float = 18.0
+
+## 每帧最多创建的可见牌面数量；默认2张平衡首屏展示速度和帧时间，运行时可调整。
+## 补充：当前默认4张，并优先完成当前屏，剩余额度用于预取。
+@export_range(1, 8, 1) var visible_views_per_frame: int = 4
+
+## 视口上下提前准备的屏幕高度倍数；默认2倍，运行时可按内存和滚动速度调整。
+@export_range(0.0, 5.0, 0.5) var prefetch_viewport_count: float = 2.0
 
 ## 右侧浏览区叠加主题面板色的透明度；默认0.18与主菜单其他内容页一致，只影响视觉明暗。
 @export_range(0.0, 1.0, 0.01) var detail_shade_opacity: float = 0.18
@@ -211,9 +221,66 @@ var _information_skill_name_labels: Array[Label] = []
 var _information_skill_description_labels: Array[SkillDescriptionView] = []
 
 
+## 分类到完整条目数组的缓存；已创建牌面保持入树，切换分类和关闭页面后可直接复用。
+var _cached_entries_by_category: Dictionary = {}
+
+## 当前缓存对应的数据库版本；重载内容后失效，避免展示旧定义。
+var _cached_database_revision: int = -1
+
+## 当前缓存对应的缩放参数签名；尺寸配置改变后重建槽位，默认-1表示尚未缓存。
+var _cached_layout_signature: int = -1
+
+## 当前缓存对应的牌名模式；模式变化后重建搜索与显示，默认-1表示尚未缓存。
+var _cached_name_mode: int = -1
+
+## 当前条目所属分类；与菜单待切换分类分开记录，避免切换时缓存到错误键。
+var _built_category: String = ""
+
+## 牌面区域等待遮罩；当前屏准备完成后隐藏，滚动条与顶部导航不受影响。
+var _loading_cover: ColorRect
+
+
+## 逐帧创建视口内的牌面；离开视口的节点及时释放，搜索和排序继续使用完整元数据。
+## 补充：已创建节点现在缓存至分类或数据失效，并预取视口附近内容。
+func _process(_delta: float) -> void:
+	if not is_visible_in_tree() or not _grid_scroll.visible:
+		if _loading_cover != null:
+			_loading_cover.call("set_loading", false, _grid_scroll)
+		return
+	# 本帧剩余创建额度；先处理当前屏，再处理上下缓冲区。
+	var remaining: int = visible_views_per_frame
+	# 当前滚动视口边界；缓冲按视口高度延伸，支持快速连续滚动。
+	var top: float = _grid_scroll.scroll_vertical
+	var bottom: float = top + _grid_scroll.size.y
+	var margin: float = _grid_scroll.size.y * prefetch_viewport_count
+	for pass_index: int in range(2):
+		for entry: Dictionary in _entries:
+			# 当前条目槽和牌面；已加载节点始终保留，筛选只改变槽的可见性。
+			var slot: Control = entry.get("slot") as Control
+			var view: Node = entry.get("view") as Node
+			if not slot.visible or is_instance_valid(view):
+				continue
+			# 第一轮只处理当前屏，第二轮处理邻近缓冲区。
+			var in_viewport: bool = slot.position.y + slot.size.y > top and slot.position.y < bottom
+			var in_buffer: bool = slot.position.y + slot.size.y > top - margin and slot.position.y < bottom + margin
+			if remaining > 0 and ((pass_index == 0 and in_viewport) or (pass_index == 1 and in_buffer)):
+				_create_entry_view(entry)
+				remaining -= 1
+	# 只有当前可视范围完整时才揭开遮罩，缓冲区继续在后台逐帧准备。
+	var viewport_pending: bool = false
+	for entry: Dictionary in _entries:
+		var slot: Control = entry.get("slot") as Control
+		if slot.visible and slot.position.y + slot.size.y > top and slot.position.y < bottom and not is_instance_valid(entry.get("view")):
+			viewport_pending = true
+			break
+	_loading_cover.call("set_loading", viewport_pending or _layout_refresh_queued, _grid_scroll)
+
+
 ## 初始化分类按钮、搜索、资料模态与全局表现信号；组件默认隐藏且不读取任何对局状态。
 func _ready() -> void:
 	visible = false
+	_loading_cover = GALLERY_LOADING_COVER_SCRIPT.new() as ColorRect
+	add_child(_loading_cover)
 	_characters_tab_button.pressed.connect(_select_category.bind(CATEGORY_CHARACTERS))
 	_game_cards_tab_button.pressed.connect(_select_category.bind(CATEGORY_GAME_CARDS))
 	_opportunities_tab_button.pressed.connect(_select_category.bind(CATEGORY_OPPORTUNITIES))
@@ -231,6 +298,7 @@ func _ready() -> void:
 func open_panel() -> void:
 	visible = true
 	move_to_front()
+	_loading_cover.call("set_loading", true, _grid_scroll)
 	_close_information(false)
 	for category_id: String in CATEGORY_ORDER:
 		_search_queries_by_category[category_id] = ""
@@ -287,9 +355,7 @@ func refresh_ui_style() -> void:
 	_apply_scroll_bar_style(_grid_scroll.get_v_scroll_bar())
 	_apply_scroll_bar_style(_information_scroll.get_v_scroll_bar())
 	_apply_scroll_bar_style(_information_character_skill_scroll.get_v_scroll_bar())
-	for view: Node in _content_views:
-		if view != null and is_instance_valid(view) and view.has_method("refresh_ui_style"):
-			view.call("refresh_ui_style")
+	_refresh_cached_view_styles()
 	if _information_character_view != null and is_instance_valid(_information_character_view):
 		_information_character_view.refresh_ui_style()
 
@@ -328,14 +394,37 @@ func _refresh_category_state() -> void:
 
 ## 依据当前分类清理并重建正式牌面节点；内容只取静态元数据深拷贝，不缓存规则定义对象。
 func _rebuild_current_entries() -> void:
-	_clear_entries()
-	if _current_category == CATEGORY_CHARACTERS:
+	# 数据库、牌名模式或缩放改变时，旧牌面、搜索文本或槽尺寸不再可靠。
+	var layout_signature: int = hash([character_card_scale, game_card_scale, opportunity_card_scale])
+	if _cached_database_revision != GameDatabase.content_revision or _cached_name_mode != int(GameSettings.card_name_mode) or _cached_layout_signature != layout_signature:
+		_clear_entries()
+		_cached_database_revision = GameDatabase.content_revision
+		_cached_name_mode = int(GameSettings.card_name_mode)
+		_cached_layout_signature = layout_signature
+	elif not _built_category.is_empty():
+		_cached_entries_by_category[_built_category] = _entries
+		for entry: Dictionary in _entries:
+			(entry["slot"] as Control).visible = false
+	_entries = []
+	_content_views.clear()
+	_built_category = _current_category
+	if _cached_entries_by_category.has(_current_category):
+		_entries = _cached_entries_by_category[_current_category]
+		for entry: Dictionary in _entries:
+			# 已存在的牌面重新应用当前主题；缓存节点不离开场景树。
+			var view: Node = entry.get("view") as Node
+			if is_instance_valid(view):
+				_content_views.append(view)
+	elif _current_category == CATEGORY_CHARACTERS:
 		_build_character_entries()
 	elif _current_category == CATEGORY_GAME_CARDS:
 		_build_game_card_entries()
 	elif _current_category == CATEGORY_OPPORTUNITIES:
 		_build_opportunity_entries()
+	_cached_entries_by_category[_current_category] = _entries
+	_refresh_cached_view_styles()
 	_queue_filter_and_layout()
+
 
 
 ## 从全部已登记武将建立正式武将牌条目；按中文名排序，重名时再按稳定 ID 保证顺序可复现。
@@ -346,6 +435,11 @@ func _build_character_entries() -> void:
 	for character_id_variant: Variant in GameDatabase.characters.keys():
 		character_ids.append(str(character_id_variant))
 	character_ids.sort_custom(_sort_character_ids)
+	# 从场景读取统一布局尺寸；只实例化一次，不初始化牌面。
+	var prototype: PlayerTargetView = PLAYER_TARGET_VIEW_SCENE.instantiate() as PlayerTargetView
+	# 当前武将缩放后尺寸；网格槽始终以此固定尺寸参与布局。
+	var scaled_size: Vector2 = prototype.card_size * character_card_scale
+	prototype.free()
 	for character_index: int in range(character_ids.size()):
 		# 当前武将稳定 ID；点击与资料查询只使用该值。
 		var character_id: String = character_ids[character_index]
@@ -369,14 +463,11 @@ func _build_character_entries() -> void:
 			"judgment_area":[],
 			"wooden_ox_storage_count":0,
 		}
-		# 当前正式武将牌；外层缩放根保证后续组件动画不会覆盖图鉴比例。
-		var character_view: PlayerTargetView = PLAYER_TARGET_VIEW_SCENE.instantiate() as PlayerTargetView
-		character_view.configure_snapshot(character_snapshot, character_definition, false, faction_definition)
-		character_view.set_match_overlays_visible(false)
-		character_view.pressed.connect(_open_information.bind(CATEGORY_CHARACTERS, character_id))
-		# 当前武将缩放后尺寸；网格槽始终以此固定尺寸参与布局。
-		var scaled_size: Vector2 = character_view.card_size * character_card_scale
-		_add_entry_slot(character_id, _build_character_search_text(character_id, character_definition, faction_definition), character_view, scaled_size, character_card_scale)
+		# 当前武将缩放后尺寸；从场景实例读取配置，不初始化正式牌面。
+		_add_entry_slot(character_id, _build_character_search_text(character_id, character_definition, faction_definition), null, scaled_size, character_card_scale)
+		_entries.back()["definition"] = character_definition
+		_entries.back()["faction"] = faction_definition
+		_entries.back()["snapshot"] = character_snapshot
 
 
 ## 从全部已登记游戏牌定义建立唯一牌面条目；同一牌名的不同逻辑定义仍按各自稳定 ID 分别展示。
@@ -388,6 +479,11 @@ func _build_game_card_entries() -> void:
 	for card_id_variant: Variant in GameDatabase.cards.keys():
 		card_ids.append(str(card_id_variant))
 	card_ids.sort_custom(_sort_game_card_ids)
+	# 从场景读取统一布局尺寸；只实例化一次，不初始化牌面。
+	var prototype: CardView = CARD_VIEW_SCENE.instantiate() as CardView
+	# 当前游戏牌缩放后尺寸；复用 CardView 公开尺寸接口避免读取场景子节点。
+	var scaled_size: Vector2 = prototype.get_card_size() * game_card_scale
+	prototype.free()
 	for card_index: int in range(card_ids.size()):
 		# 当前游戏牌稳定 ID；代表实体与完整资料均由该 ID 定位。
 		var card_id: String = card_ids[card_index]
@@ -397,29 +493,27 @@ func _build_game_card_entries() -> void:
 		var representative_card: Dictionary = (_representative_card_by_definition_id.get(card_id, {}) as Dictionary).duplicate(true)
 		representative_card["uid"] = -(card_index + 1)
 		representative_card["definition_id"] = card_id
-		# 当前正式游戏牌；图鉴启用点击与悬停，但不绑定手牌排序分区或对局动作。
-		var card_view: CardView = CARD_VIEW_SCENE.instantiate() as CardView
-		card_view.configure(representative_card, card_definition, false, true, false)
-		card_view.pressed.connect(_open_information.bind(CATEGORY_GAME_CARDS, card_id))
-		# 当前游戏牌缩放后尺寸；复用 CardView 公开尺寸接口避免读取场景子节点。
-		var scaled_size: Vector2 = card_view.get_card_size() * game_card_scale
-		_add_entry_slot(card_id, _build_game_card_search_text(card_id, card_definition), card_view, scaled_size, game_card_scale)
+		# 当前游戏牌缩放后尺寸；场景配置是布局尺寸的唯一来源。
+		_add_entry_slot(card_id, _build_game_card_search_text(card_id, card_definition), null, scaled_size, game_card_scale)
+		_entries.back()["definition"] = card_definition
+		_entries.back()["snapshot"] = representative_card
 
 
 ## 从完整机缘目录建立品质牌面条目；包括不参与随机三选一的灰色关卡机缘。
 func _build_opportunity_entries() -> void:
 	# 全部机缘定义；公开接口返回深拷贝，组件可安全排序而不改写静态目录。
 	var opportunity_definitions: Array[Dictionary] = OpportunityCatalog.get_all_cards()
+	# 从场景读取统一布局尺寸；只实例化一次，不初始化牌面。
+	var prototype: OpportunityCardView = OPPORTUNITY_CARD_SCENE.instantiate() as OpportunityCardView
+	# 当前机缘卡缩放后尺寸；外层缩放根保留 OpportunityCardView 自身1.06倍悬停动画。
+	var scaled_size: Vector2 = prototype.card_size * opportunity_card_scale
+	prototype.free()
 	for opportunity_definition: Dictionary in opportunity_definitions:
 		# 当前机缘稳定 ID；点击资料与搜索结果均保持该唯一来源。
 		var opportunity_id: String = str(opportunity_definition.get("id", ""))
-		# 当前正式机缘牌；interactive 只启用图鉴点击和悬停，不会提交 choose_opportunity。
-		var opportunity_view: OpportunityCardView = OPPORTUNITY_CARD_SCENE.instantiate() as OpportunityCardView
-		# 当前机缘卡缩放后尺寸；外层缩放根保留 OpportunityCardView 自身1.06倍悬停动画。
-		var scaled_size: Vector2 = opportunity_view.card_size * opportunity_card_scale
-		_add_entry_slot(opportunity_id, _build_opportunity_search_text(opportunity_definition), opportunity_view, scaled_size, opportunity_card_scale)
-		opportunity_view.configure(opportunity_definition, true)
-		opportunity_view.card_selected.connect(_on_opportunity_card_selected)
+		# 当前机缘卡缩放后尺寸；场景配置是布局尺寸的唯一来源。
+		_add_entry_slot(opportunity_id, _build_opportunity_search_text(opportunity_definition), null, scaled_size, opportunity_card_scale)
+		_entries.back()["definition"] = opportunity_definition
 
 
 ## 为一张正式牌面创建固定尺寸槽和独立缩放根；网格只移动槽，不改写牌面组件自身位置。
@@ -430,18 +524,64 @@ func _add_entry_slot(entry_id: String, search_text: String, view: Node, scaled_s
 	slot.size = scaled_size
 	slot.custom_minimum_size = scaled_size
 	_grid_content.add_child(slot)
-	# 当前牌面缩放根；组件悬停动画只改变自身局部缩放，不覆盖图鉴的基础显示比例。
-	var scale_root: Node2D = Node2D.new()
-	scale_root.scale = Vector2.ONE * view_scale
-	slot.add_child(scale_root)
-	scale_root.add_child(view)
 	_entries.append({
 		"id":entry_id,
+		"category":_current_category,
 		"search_text":_normalize_search_text(search_text),
 		"slot":slot,
 		"size":scaled_size,
+		"scale":view_scale,
+		"view":view,
 	})
+
+
+## 根据条目元数据创建一张正式牌面；仅由逐帧可见范围调度调用。
+func _create_entry_view(entry: Dictionary) -> void:
+	# 当前条目所属分类和稳定 ID；用于选择正式场景与详情入口。
+	var category: String = str(entry["category"])
+	var entry_id: String = str(entry["id"])
+	# 当前牌面节点；各分类复用原有正式组件和输入信号。
+	var view: Node
+	if category == CATEGORY_CHARACTERS:
+		# 当前正式武将牌；外层缩放根保证后续组件动画不会覆盖图鉴比例。
+		var character_view: PlayerTargetView = PLAYER_TARGET_VIEW_SCENE.instantiate() as PlayerTargetView
+		character_view.configure_snapshot(entry["snapshot"], entry["definition"], false, entry["faction"])
+		character_view.set_match_overlays_visible(false)
+		character_view.pressed.connect(_open_information.bind(CATEGORY_CHARACTERS, entry_id))
+		view = character_view
+	elif category == CATEGORY_GAME_CARDS:
+		# 当前正式游戏牌；图鉴启用点击与悬停，但不绑定手牌排序分区或对局动作。
+		var card_view: CardView = CARD_VIEW_SCENE.instantiate() as CardView
+		card_view.configure(entry["snapshot"], entry["definition"], false, true, false)
+		card_view.pressed.connect(_open_information.bind(CATEGORY_GAME_CARDS, entry_id))
+		view = card_view
+	else:
+		# 当前正式机缘牌；interactive 只启用图鉴点击和悬停，不会提交 choose_opportunity。
+		var opportunity_view: OpportunityCardView = OPPORTUNITY_CARD_SCENE.instantiate() as OpportunityCardView
+		opportunity_view.card_selected.connect(_on_opportunity_card_selected)
+		view = opportunity_view
+	# 当前牌面缩放根；组件悬停动画只改变自身局部缩放，不覆盖图鉴的基础显示比例。
+	var scale_root: Node2D = Node2D.new()
+	scale_root.scale = Vector2.ONE * float(entry["scale"])
+	(entry["slot"] as Control).add_child(scale_root)
+	scale_root.add_child(view)
+	if category == CATEGORY_OPPORTUNITIES:
+		(view as OpportunityCardView).configure(entry["definition"], true)
+	entry["view"] = view
+	entry["style_id"] = GameSettings.ui_style_id
 	_content_views.append(view)
+
+
+## 只重绘主题已变化的缓存牌面；重复打开或滚回时不对全部节点执行昂贵的样式更新。
+func _refresh_cached_view_styles() -> void:
+	for entry: Dictionary in _entries:
+		# 缓存牌面；不存在或已使用当前主题时无需任何更新。
+		var view: Node = entry.get("view") as Node
+		if not is_instance_valid(view) or str(entry.get("style_id", "")) == GameSettings.ui_style_id:
+			continue
+		if view.has_method("refresh_ui_style"):
+			view.call("refresh_ui_style")
+		entry["style_id"] = GameSettings.ui_style_id
 
 
 ## 搜索文本变化时保存当前子分页关键词并重排可见条目；匹配使用不区分英文大小写的包含关系。
@@ -456,6 +596,8 @@ func _queue_filter_and_layout() -> void:
 	if not is_node_ready() or _layout_refresh_queued:
 		return
 	_layout_refresh_queued = true
+	if visible and _loading_cover != null:
+		_loading_cover.call("set_loading", true, _grid_scroll)
 	call_deferred("_apply_filter_and_layout")
 
 
@@ -898,7 +1040,9 @@ func _normalize_search_text(search_text: String) -> String:
 
 ## 清理当前分类的动态槽和正式牌面；重新打开或切换分类不会残留旧输入信号与节点。
 func _clear_entries() -> void:
-	_entries.clear()
+	_cached_entries_by_category.clear()
+	_built_category = ""
+	_entries = []
 	_content_views.clear()
 	for child: Node in _grid_content.get_children():
 		_grid_content.remove_child(child)

@@ -385,12 +385,17 @@ var _mode_details_description_label: Label
 var _mode_details_close_button: Button
 
 
+## 数据加载期间最近一次菜单请求的序号；新操作使旧的异步等待失效，避免加载完成后跳转到过时页面。
+var _database_request_version: int = 0
+
+
 ## 初始化主菜单交互与全局设置同步；主菜单进入场景后始终覆盖尚未开局的牌桌。
 func _ready() -> void:
 	# 当前菜单绘制与输入层；提升到同级节点最前方，确保选将遮罩和局内菜单不会遮挡启动入口。
 	call_deferred("_move_to_input_front")
 	_build_mode_details_interface()
 	visibility_changed.connect(_on_visibility_changed)
+	GameDatabase.database_ready.connect(_on_database_ready)
 	_top_identity_mode_button.pressed.connect(_select_identity_mode)
 	_identity_mode_button.pressed.connect(_select_identity_mode)
 	_doudizhu_mode_button.pressed.connect(_select_doudizhu_mode)
@@ -509,6 +514,12 @@ func _ready() -> void:
 	_refresh_conquest_opportunity_choice_selection(GameSettings.conquest_opportunity_choice_mode)
 	refresh_ui_style()
 	call_deferred("_focus_start_game_button")
+
+
+## 完成内容加载后清除等待提示；其他状态或错误提示保留，不覆盖后续操作结果。
+func _on_database_ready() -> void:
+	if _menu_status_label.text == "正在加载游戏内容，请稍候…":
+		_show_status("", false)
 
 
 ## 在父节点完成初始化后提升主菜单分支；保证启动页面的绘制顺序与真实 GUI 命中顺序一致。
@@ -800,6 +811,7 @@ func _restore_selected_match_mode() -> void:
 
 
 func _select_identity_mode() -> void:
+	_database_request_version += 1
 	# 联机设置内容页；点击“模式选择”时回到默认主菜单内容，顶部导航始终保留在原位。
 	if _online_settings_panel.visible:
 		_close_online_settings(false)
@@ -847,6 +859,7 @@ func _select_identity_mode() -> void:
 
 ## 选中斗地主模式；人数限制为 3 与 5，写入下一局模式配置后不改进行中的对局。
 func _select_doudizhu_mode() -> void:
+	_database_request_version += 1
 	if _online_settings_panel.visible:
 		_close_online_settings(false)
 	if _all_cards_panel.visible:
@@ -896,6 +909,7 @@ func _select_doudizhu_mode() -> void:
 
 ## 选中 2v2 模式；固定 4 人，写入下一局模式配置后不改进行中的对局。
 func _select_team2v2_mode() -> void:
+	_database_request_version += 1
 	if _online_settings_panel.visible:
 		_close_online_settings(false)
 	if _all_cards_panel.visible:
@@ -945,6 +959,7 @@ func _select_team2v2_mode() -> void:
 
 ## 选中1v1车轮战模式；固定2人并显示明置X、暗置Y两项专属候选设置。
 func _select_wheel_duel_mode() -> void:
+	_database_request_version += 1
 	if _online_settings_panel.visible:
 		_close_online_settings(false)
 	if _all_cards_panel.visible:
@@ -985,6 +1000,7 @@ func _select_wheel_duel_mode() -> void:
 
 ## 选中机缘大乱斗模式；人数范围继承身份模式2至10人，并显示普通身份局的开局设置。
 func _select_opportunity_brawl_mode() -> void:
+	_database_request_version += 1
 	if _online_settings_panel.visible:
 		_close_online_settings(false)
 	if _all_cards_panel.visible:
@@ -1027,6 +1043,7 @@ func _select_opportunity_brawl_mode() -> void:
 
 ## 选中过关斩将模式；固定玩家先手对战AI，菜单仅保留通用显示设置并隐藏普通选将与车轮战候选配置。
 func _select_conquest_mode() -> void:
+	_database_request_version += 1
 	if _online_settings_panel.visible:
 		_close_online_settings(false)
 	if _all_cards_panel.visible:
@@ -1069,6 +1086,7 @@ func _select_conquest_mode() -> void:
 
 ## 选中胜者为王模式；全员同为内奸且互为敌人，保留标准身份局的选将与人数设置，并额外显示座次补偿开关。
 func _select_winner_takes_all_mode() -> void:
+	_database_request_version += 1
 	if _online_settings_panel.visible:
 		_close_online_settings(false)
 	if _all_cards_panel.visible:
@@ -1222,6 +1240,7 @@ func _refresh_mode_details_button() -> void:
 
 ## 打开当前模式详情；标题与正文每次从稳定说明表读取，切换模式后不会残留旧内容。
 func _open_mode_details() -> void:
+	_database_request_version += 1
 	# 当前模式详情静态说明；未登记模式不打开空白模态。
 	var mode_details: Dictionary = MODE_DETAILS_BY_MODE.get(_selected_match_mode, {}) as Dictionary
 	if mode_details.is_empty() or _mode_details_panel == null:
@@ -1259,6 +1278,7 @@ func _on_mode_details_backdrop_gui_input(event: InputEvent) -> void:
 
 ## 打开设置浮层；模式预览保持可见，玩家可在不离开主菜单的情况下调整显示和人数配置。
 func _open_settings() -> void:
+	_database_request_version += 1
 	MobileKeyboardGuard.release_text_focus_and_hide(get_viewport())
 	_close_mode_details(false)
 	_close_online_settings(false)
@@ -1271,6 +1291,14 @@ func _open_settings() -> void:
 
 ## 切换到联机资料设置内容页；名称与形象由组件从 GameSettings 读取，顶部导航保持可点并可直接切回模式选择。
 func _open_online_settings() -> void:
+	_database_request_version += 1
+	# 当前请求序号；等待期间玩家切换入口时不再执行旧请求。
+	var request_version: int = _database_request_version
+	if not GameDatabase.is_database_ready():
+		_show_status("正在加载游戏内容，请稍候…", false)
+		await GameDatabase.wait_until_ready()
+		if not is_inside_tree() or request_version != _database_request_version:
+			return
 	MobileKeyboardGuard.release_text_focus_and_hide(get_viewport())
 	_set_settings_visible(false)
 	_lan_lobby_panel.visible = false
@@ -1288,6 +1316,14 @@ func _open_online_settings() -> void:
 
 ## 切换到所有卡牌内容页；浏览组件从静态目录读取武将、游戏牌与机缘，顶部导航保持可直接切换。
 func _open_all_cards() -> void:
+	_database_request_version += 1
+	# 当前请求序号；等待期间玩家切换入口时不再执行旧请求。
+	var request_version: int = _database_request_version
+	if not GameDatabase.is_database_ready():
+		_show_status("正在加载游戏内容，请稍候…", false)
+		await GameDatabase.wait_until_ready()
+		if not is_inside_tree() or request_version != _database_request_version:
+			return
 	MobileKeyboardGuard.release_text_focus_and_hide(get_viewport())
 	_set_settings_visible(false)
 	_lan_lobby_panel.visible = false
@@ -1304,6 +1340,14 @@ func _open_all_cards() -> void:
 
 ## 切换到对局回放内容页；回放组件只读取本地回放文件，顶部导航保持可直接切换到其他内容页。
 func _open_match_replay() -> void:
+	_database_request_version += 1
+	# 当前请求序号；等待期间玩家切换入口时不再执行旧请求。
+	var request_version: int = _database_request_version
+	if not GameDatabase.is_database_ready():
+		_show_status("正在加载游戏内容，请稍候…", false)
+		await GameDatabase.wait_until_ready()
+		if not is_inside_tree() or request_version != _database_request_version:
+			return
 	if _match_replay_panel == null:
 		return
 	MobileKeyboardGuard.release_text_focus_and_hide(get_viewport())
@@ -1340,6 +1384,14 @@ func show_match_replay_page() -> void:
 ## 打开独立局域网大厅组件；人数沿用主菜单下一局配置，端口读取网关组件的公开默认值。
 ## 过关斩将同样可进入局域网：大厅人数表示玩家数（2至4），每名玩家对应一名敌方AI。
 func _open_lan_panel() -> void:
+	_database_request_version += 1
+	# 当前请求序号；等待期间玩家切换入口时不再执行旧请求。
+	var request_version: int = _database_request_version
+	if not GameDatabase.is_database_ready():
+		_show_status("正在加载游戏内容，请稍候…", false)
+		await GameDatabase.wait_until_ready()
+		if not is_inside_tree() or request_version != _database_request_version:
+			return
 	MobileKeyboardGuard.release_text_focus_and_hide(get_viewport())
 	_set_settings_visible(false)
 	_close_online_settings(false)
@@ -1417,6 +1469,14 @@ func _focus_match_replay_button() -> void:
 
 ## 读取有效人数并请求开始身份局；成功后的实际开局、状态清理与选将流程由牌桌统一处理。
 func _request_start_game() -> void:
+	_database_request_version += 1
+	# 当前请求序号；等待期间玩家切换入口时不再执行旧请求。
+	var request_version: int = _database_request_version
+	if not GameDatabase.is_database_ready():
+		_show_status("正在加载游戏内容，请稍候…", false)
+		await GameDatabase.wait_until_ready()
+		if not is_inside_tree() or request_version != _database_request_version:
+			return
 	# 已确认的下一局人数；写回控件使文本、Range 数值和发出的开局请求保持一致。
 	var player_count: int = get_next_player_count()
 	_apply_player_count_value(player_count)
