@@ -306,10 +306,10 @@ func _test_full_match_replacement_flow() -> bool:
 	if enemy_yongyi == null:
 		return _fail("conquest_yongyi_missing")
 	# 双方初始手牌；清空所有可能的【桃】或【酒】，使本次真实致死伤害稳定走到死亡与来源尾部。
-	while not player.hand.is_empty():
-		_controller._move_to_discard(player.hand.pop_back())
-	while not enemy.hand.is_empty():
-		_controller._move_to_discard(enemy.hand.pop_back())
+	for card: CardInstance in player.hand.duplicate():
+		_controller._move_to_discard(card)
+	for card: CardInstance in enemy.hand.duplicate():
+		_controller._move_to_discard(card)
 	# 回合开始类技能（例如【铁壁】）会创建可取消的费用目标询问并把阶段写成 "choice"；
 	# 固定种子选将会随武将池变化而换人，因此必须先结算这些技能选择，才能关闭旧请求并重建权威候选。
 	if not _settle_pending_skill_choices():
@@ -321,8 +321,8 @@ func _test_full_match_replacement_flow() -> bool:
 			return _fail("enemy_out_of_game_restore")
 	# 取消开局技能选择会放行被其中断的流程（例如回合开始的摸牌阶段），因此必须再清空一次手牌，
 	# 保证后续断言只统计本测试自己加入的实体牌；这些附带摸牌会随固定种子选将结果变化。
-	while not player.hand.is_empty():
-		_controller._move_to_discard(player.hand.pop_back())
+	for card: CardInstance in player.hand.duplicate():
+		_controller._move_to_discard(card)
 	# 初始回合可能已经建立空的chooseToUse；先关闭旧请求，加入测试实体后再建立包含它们的权威候选。
 	_controller._cancel_active_play_choice("conquest_test_setup")
 	# 本次真实击杀使用的【杀】；从普通手牌进入processing并走完整指定目标、响应、伤害与生命周期尾部。
@@ -408,7 +408,12 @@ func _test_full_match_replacement_flow() -> bool:
 			tail_lineup.append("%d=%s" % [tail_player.player_id, tail_player.character_id])
 		return _fail("replacement_zaixian_tail hand=%d extra=%s cards=%s lineup=%s" % [player.hand.size(), _controller._extra_play_phase_counts, str(tail_hand_ids), str(tail_lineup)])
 	# 换将等待只阻止旧规则继续，不暂停场景树；弃置区域的飞牌动画必须能在此期间持续播放。
-	if _controller.is_gameplay_paused() or not _controller._conquest_replacement_transition_active or _controller._conquest_replacement_settlement_pause_token < 0 or _controller.game_flow_pacer == null or not _controller.game_flow_pacer.has_pending(MatchController.CONQUEST_REPLACEMENT_OPPORTUNITY_TASK_KEY) or not _controller.event_scheduler.pause_registry.has_active() or not _controller.state.opportunity_state.is_empty():
+	# 父牌还可能在真实帧预算中回收材料；观察完整边界，不在回答尾部选择的调用栈内假设转场已开始。
+	for _boundary_frame: int in range(120):
+		if _controller._conquest_replacement_transition_active or _controller.state.game_over or _controller.has_pending_card_choice():
+			break
+		await get_tree().process_frame
+	if _controller.is_gameplay_paused() or not _controller._conquest_replacement_transition_active or _controller.game_flow_pacer == null or not _controller.game_flow_pacer.has_pending(MatchController.CONQUEST_REPLACEMENT_OPPORTUNITY_TASK_KEY) or not _controller.state.opportunity_state.is_empty():
 		return _fail("replacement_opportunity_preview")
 	if not await _wait_for_conquest_replacement_opportunity():
 		return _fail("replacement_opportunity_delay")
@@ -418,7 +423,7 @@ func _test_full_match_replacement_flow() -> bool:
 		return _fail("replacement_discards_all_regions")
 	if not await _choose_gain_opportunity_from_enemy(player.player_id, enemy.player_id):
 		return false
-	if _controller.state.current_player_id != player.player_id or _controller._conquest_replacement_settlement_pause_token >= 0:
+	if _controller.state.current_player_id != player.player_id:
 		return _fail("player_turn_continues")
 	# 当前玩家出牌选择会占用统一请求槽；本断言先关闭它，再人工派发旧代次damageAfter验证新武将永屹不会继承旧伤害。
 	_controller._cancel_active_play_choice("conquest_generation_test")

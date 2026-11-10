@@ -278,7 +278,6 @@ func _reset_state(player_count: int) -> void:
 	_controller._play_choice_match_id = ""
 	_controller._judgment_flow_token += 1
 	_controller._judgment_flow_in_progress = false
-	_controller._judgment_resume_needs_result_pause = false
 	_controller.ai_coordinator._policies.clear()
 	_presentation_history.clear()
 	_simultaneous_negation_requests.clear()

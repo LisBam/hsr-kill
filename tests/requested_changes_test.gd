@@ -259,6 +259,7 @@ func _test_chain_targets_and_ai() -> bool:
 	# 星火运行时技能；唯一竖置目标在第一次触发时被横置，已横置目标不再触发任何状态变化。
 	var xinghuo: SkillDefinition = GameDatabase.create_skill("xinghuo")
 	xinghuo.bind(_controller, 0)
+	_controller.skill_instances_by_player[0] = {"xinghuo":xinghuo}
 	# 星火触发事件；铁索是任意“使用牌”，目标数组只有二号玩家且其武将牌当前竖置。
 	var targeted_event: RuleEvent = RuleEvent.new("useCardToTargeted", 0, 1, {"card_id":"tiesuo", "target_id":1, "target_ids":[1]}, 0)
 	xinghuo.call("_on_owner_card_targeted", targeted_event)
@@ -432,7 +433,9 @@ func _test_public_gain_log_content() -> bool:
 	public_equipment.owner_id = 1
 	public_equipment.known_to.assign([0, 1, 2])
 	_controller.state.get_player(1).equipment["weapon"] = public_equipment
-	if not _controller.gain_card_to_hand_by_uid(0, public_equipment.uid, "chuanchong"):
+	# 当前独立移牌结果；本用例没有暂停窗口，仍须显式确认完成与实际成功。
+	var public_equipment_gain: CardMoveResolutionService = _controller.gain_card_to_hand_by_uid(0, public_equipment.uid, "chuanchong")
+	if not public_equipment_gain.completed or not bool(public_equipment_gain.result.get("success", false)):
 		return _fail("public_gain_move_failed")
 	# 预期公开日志；技能显示中文【传冲】，已知实体显示完整牌面而不是“一张牌”。
 	var expected_public_log: String = "%s因【传冲】获得了%s。" % [_controller.format_player_state_log_name(_controller.state.get_player(0)), _controller.format_card_log_name(public_equipment)]
@@ -444,7 +447,9 @@ func _test_public_gain_log_content() -> bool:
 	hidden_gain_card.known_to.assign([0])
 	hidden_gain_card.shown = false
 	_controller.state.draw_pile.append(hidden_gain_card)
-	if not _controller.gain_card_to_hand_by_uid(0, hidden_gain_card.uid, "chuanchong"):
+	# 当前独立移牌结果；本用例没有暂停窗口，仍须显式确认完成与实际成功。
+	var hidden_gain_card_gain: CardMoveResolutionService = _controller.gain_card_to_hand_by_uid(0, hidden_gain_card.uid, "chuanchong")
+	if not hidden_gain_card_gain.completed or not bool(hidden_gain_card_gain.result.get("success", false)):
 		return _fail("hidden_gain_move_failed")
 	# 隐藏获得日志；技能名仍为中文，但实体牌面不得泄露给第三名角色。
 	var expected_hidden_log: String = "%s因【传冲】获得了一张牌。" % _controller.format_player_state_log_name(_controller.state.get_player(0))

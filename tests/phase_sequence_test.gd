@@ -14,10 +14,10 @@ class PhaseController extends MatchController:
 		next_phase_method = str(callback.get_method())
 
 	## 记录主体开放次数，检验Begin暂停时不能提前开放操作。
-	func _begin_play_choice(_player_id: int) -> void:
+	func _begin_play_choice(_player_id: int, phase_entry: bool = false) -> void:
 		# 已有正式请求时重复恢复应幂等；仅计入真实新建的操作窗口。
 		var had_choice: bool = _has_active_play_choice()
-		super._begin_play_choice(_player_id)
+		super._begin_play_choice(_player_id, phase_entry)
 		if not had_choice and _has_active_play_choice():
 			play_body_count += 1
 

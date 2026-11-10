@@ -903,7 +903,7 @@ func _test_new_opportunity_mechanisms() -> bool:
 	var view_as_card: CardInstance = _add_test_card("sha", "hand", 0)
 	if _controller.set_all_hand_cards_view_as(0, "wuzhong", "test") != 1 or view_as_card.definition_id != "wuzhong" or view_as_card.hand_view_as_original_definition_id != "sha":
 		return _fail("view_all_hand_as")
-	if not _controller.discard_card_from_hand(0, view_as_card.uid) or view_as_card.definition_id != "sha" or view_as_card.has_hand_view_as():
+	if not bool(_controller.discard_card_from_hand(0, view_as_card.uid).result.get("success", false)) or view_as_card.definition_id != "sha" or view_as_card.has_hand_view_as():
 		return _fail("view_as_leave_hand")
 	# 三种不同延时锦囊与一张重复乐不思蜀；检索结果必须只取三个不同稳定定义ID。
 	_add_test_card("lebu", "draw_pile")
@@ -914,7 +914,9 @@ func _test_new_opportunity_mechanisms() -> bool:
 	var delayed_definition_ids: Dictionary = {}
 	for delayed_uid: int in delayed_uids:
 		# 当前延时锦囊位置；测试通过公开UID获得端口读取并移动到手牌后确认定义。
-		if not _controller.gain_card_to_hand_by_uid(0, delayed_uid, "test"):
+		# 本次实际获得结果；不能把非空句柄本身当作成功。
+		var delayed_gain: CardMoveResolutionService = _controller.gain_card_to_hand_by_uid(0, delayed_uid, "test")
+		if not delayed_gain.completed or not bool(delayed_gain.result.get("success", false)):
 			return _fail("distinct_delayed_gain")
 		var gained_card: CardInstance = first_player.find_hand_card(delayed_uid)
 		delayed_definition_ids[gained_card.definition_id] = true
@@ -927,10 +929,10 @@ func _test_new_opportunity_mechanisms() -> bool:
 	_controller._install_card_runtime(armor_card, 1)
 	var equipment_entries: Array[Dictionary] = _controller.get_equipment_swap_entries(0, 1)
 	for entry: Dictionary in equipment_entries:
-		if not _controller.move_equipment_card_to_processing(int(entry.get("source_player_id", -1)), int(entry.get("card_uid", -1)), "test"):
+		if _controller.move_equipment_card_to_processing(int(entry.get("source_player_id", -1)), int(entry.get("card_uid", -1)), "test").count != 1:
 			return _fail("equipment_swap_evacuation")
 	for entry: Dictionary in equipment_entries:
-		if not _controller.move_processing_card_to_equipment(int(entry.get("target_player_id", -1)), int(entry.get("card_uid", -1)), str(entry.get("slot", "")), "test"):
+		if _controller.move_processing_card_to_equipment(int(entry.get("target_player_id", -1)), int(entry.get("card_uid", -1)), str(entry.get("slot", "")), "test").count != 1:
 			return _fail("equipment_swap_install")
 	if first_player.get_armor() != armor_card or second_player.get_weapon() != weapon_card:
 		return _fail("equipment_swap_result")

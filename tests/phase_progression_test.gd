@@ -227,7 +227,7 @@ func _test_dying_cancel_progression() -> void:
 			_controller._ai_drive_token += 1
 			break
 	if not dying_resume_completed:
-		_fail("dying_ai_response_timeout phase=%s pending=%s" % [game_state.current_phase, _controller.has_pending_card_choice()])
+		_fail("dying_ai_response_timeout phase=%s pending=%s current=%d turn=%d reason=%s winner=%s alive=%s continuations=%s" % [game_state.current_phase, _controller.has_pending_card_choice(), game_state.current_player_id, game_state.turn_number, game_state.end_reason, game_state.winner, game_state.players.map(func(player: PlayerState) -> bool: return player.alive), _controller._rule_continuations.to_array()])
 		return
 	if game_state.players[0].alive or game_state.players[0].find_hand_card(peach_card.uid) != null or game_state.current_player_id != 1 or game_state.current_phase != "play" or game_state.turn_number != 1 or _controller.has_pending_card_choice() or not _controller._has_active_play_choice() or game_state.players[1].find_hand_card(next_draw_one.uid) == null or game_state.players[1].find_hand_card(next_draw_two.uid) == null:
 		_fail("dying_cancel_resume alive=%s current=%d phase=%s" % [game_state.players[0].alive, game_state.current_player_id, game_state.current_phase])

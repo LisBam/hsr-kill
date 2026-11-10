@@ -7,6 +7,7 @@ func _run() -> void:
 	_test_draw_before_waits_and_reads_final_count()
 	_test_gain_before_waits_before_move()
 	_test_gain_cancellation_keeps_card_in_pile()
+	_test_draw_begin_cancellation()
 	_test_draw_end_waits_for_after()
 	await _test_card_content_waits_for_nested_draw()
 	if _controller != null:
@@ -120,3 +121,22 @@ func _add_draw_cards(count: int) -> Array[CardInstance]:
 		_controller.state.draw_pile.append(card)
 		result.append(card)
 	return result
+
+
+## drawBegin的异步取消同样阻止摸牌主体；不创建表现批次或虚假的获得/摸牌后置事实。
+func _test_draw_begin_cancellation() -> void:
+	_reset_controller()
+	# 原牌堆实体；取消后必须仍保持原位置。
+	var card: CardInstance = _add_draw_cards(1)[0]
+	# 取消通知计数；取消恰好一次，不发布drawEnd或获得批次。
+	var notifications: Array[String] = []
+	_controller.trigger_manager.subscribe("drawBegin", self, _pause_window)
+	for timing_name: String in ["drawCancelled", "drawEnd", "cardsGainedBatchAfter"]:
+		_controller.event_bus.subscribe(timing_name, self, func(event: RuleEvent) -> void: notifications.append(event.name))
+	_controller.draw(0, 1)
+	_check(_controller.has_pending_card_choice() and _controller.state.draw_pile.has(card), "drawBegin did not wait before commit")
+	_paused_event.cancel("test_draw_begin_cancel")
+	_submit_choice()
+	_check(_controller.state.draw_pile.has(card) and _controller.state.get_player(0).hand.is_empty() and notifications == ["drawCancelled"], "drawBegin cancellation created draw/gain facts: " + str(notifications))
+	_check(_controller._active_draw_presentation_batch.is_empty(), "drawBegin cancellation created presentation batch")
+	_check_clean("drawBegin cancel")

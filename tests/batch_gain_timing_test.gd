@@ -117,7 +117,6 @@ func _install_state() -> void:
 	_controller._card_use_contexts.clear()
 	_controller._started_phase_lifecycles.clear()
 	# 批次栈必须从空开始：上一局或上一个用例留下的残留会让“隐式批次”判定全部失真。
-	_controller._gain_batch_stack.clear()
 
 
 ## 单张获得自成一批：非批量入口移入手牌时，隐式批次同样派发一次 batch_size 为1的事件。
@@ -126,11 +125,11 @@ func _test_single_card_gain_forms_batch() -> bool:
 	# 待获得的实体；先放入公共摸牌堆，再由统一移牌管线移入玩家1手牌。
 	var card: CardInstance = _new_card_in_draw_pile("shan", "heart", 2)
 	# 移牌结果；空值表示有效获得被错误阻止。
-	var move: CardMoveEvent = _controller._move_card_with_timings(card, "hand", 1, "batch_single", _root_event_id)
+	var move: CardMoveResolutionService = _controller.begin_card_move(card.uid, "hand", 1, "batch_single", {"event_id":_root_event_id})
 	# 本用例捕获到的批次事件；单张获得必须恰好一整批。
 	var batches: Array[Dictionary] = _events_named("cardsGainedBatchAfter")
-	if move == null or batches.size() != 1:
-		return _fail("single_batch count=%d move=%s" % [batches.size(), move != null])
+	if move.count != 1 or batches.size() != 1:
+		return _fail("single_batch count=%d move=%s" % [batches.size(), move.count == 1])
 	# 批次载荷；主体角色、张数与成员牌必须一致。
 	var payload: Dictionary = batches[0]["data"] as Dictionary
 	var batch_uids: Array = payload.get("card_uids", []) as Array
@@ -185,14 +184,14 @@ func _test_non_gain_move_dispatches_nothing() -> bool:
 	_reset_capture(["cardsGainedBatchAfter"])
 	# 弃牌堆移动；不进入手牌，因此不参与获得批次。
 	var discard_card: CardInstance = _new_card_in_draw_pile("shan", "spade", 4)
-	_controller._move_card_with_timings(discard_card, "discard_pile", -1, "batch_no_gain", _root_event_id)
+	_controller.begin_card_move(discard_card.uid, "discard_pile", -1, "batch_no_gain", {"event_id":_root_event_id})
 	# 装备区移动；虽然指定了目标角色，但目标区域不是手牌，同样不参与获得批次。
 	var equip_card: CardInstance = _new_card_in_draw_pile("zhuge", "club", 5)
-	_controller._move_card_with_timings(equip_card, "equipment", 1, "batch_no_gain", _root_event_id, "weapon")
+	_controller.begin_card_move(equip_card.uid, "equipment", 1, "batch_no_gain", {"event_id":_root_event_id, "target_slot":"weapon"})
 	if not _events_named("cardsGainedBatchAfter").is_empty():
 		return _fail("non_gain_batch_dispatched=%s" % [_captured_names])
-	if not _controller._gain_batch_stack.is_empty():
-		return _fail("non_gain_stack_not_empty=%d" % _controller._gain_batch_stack.size())
+	if not _controller._rule_sequences.is_empty():
+		return _fail("non_gain_stack_not_empty=%d" % _controller._rule_sequences.size())
 	return true
 
 
@@ -222,8 +221,8 @@ func _test_empty_bulk_gain_dispatches_nothing() -> bool:
 	var gained_count: int = _controller.gain_all_hand_cards(1, 2, "batch_empty")
 	if gained_count != 0:
 		return _fail("empty_bulk_gained=%d" % gained_count)
-	if not _events_named("cardsGainedBatchAfter").is_empty() or not _controller._gain_batch_stack.is_empty():
-		return _fail("empty_bulk_dispatched=%s stack=%d" % [_captured_names, _controller._gain_batch_stack.size()])
+	if not _events_named("cardsGainedBatchAfter").is_empty() or not _controller._rule_sequences.is_empty():
+		return _fail("empty_bulk_dispatched=%s stack=%d" % [_captured_names, _controller._rule_sequences.size()])
 	return true
 
 
@@ -233,18 +232,20 @@ func _test_cancelled_gain_leaves_no_batch() -> bool:
 	# 取消订阅；gainBefore 取消后牌并未进入手牌，隐式批次必须立即收尾。
 	_controller.event_bus.subscribe("gainBefore", self, _cancel_rule_event, 100)
 	var cancelled_card: CardInstance = _new_card_in_draw_pile("sha", "diamond", 12)
-	var cancelled_move: CardMoveEvent = _controller._move_card_with_timings(cancelled_card, "hand", 1, "batch_cancelled", _root_event_id)
+	# 被取消的独立结果；完成失败不得留下批次事实。
+	var cancelled_move: CardMoveResolutionService = _controller.begin_card_move(cancelled_card.uid, "hand", 1, "batch_cancelled", {"event_id":_root_event_id})
 	var cancelled_batches: Array[Dictionary] = _events_named("cardsGainedBatchAfter")
-	if cancelled_move != null or not cancelled_batches.is_empty() or not _controller._gain_batch_stack.is_empty():
-		return _fail("cancel_residue move=%s batches=%d stack=%d" % [cancelled_move != null, cancelled_batches.size(), _controller._gain_batch_stack.size()])
+	if cancelled_move.count == 1 or not cancelled_batches.is_empty() or not _controller._rule_sequences.is_empty():
+		return _fail("cancel_residue move=%s batches=%d stack=%d" % [cancelled_move.count == 1, cancelled_batches.size(), _controller._rule_sequences.size()])
 	# 取消订阅必须只影响本次移动；后续正常获得仍然要派发一次完整批次。
 	_controller.event_bus.unsubscribe_owner(self)
 	_reset_capture(["cardsGainedBatchAfter"])
 	var recovery_card: CardInstance = _new_card_in_draw_pile("sha", "spade", 13)
-	var recovery_move: CardMoveEvent = _controller._move_card_with_timings(recovery_card, "hand", 1, "batch_recovery", _root_event_id)
+	# 后续正常获得结果；检验前次取消不会污染新请求。
+	var recovery_move: CardMoveResolutionService = _controller.begin_card_move(recovery_card.uid, "hand", 1, "batch_recovery", {"event_id":_root_event_id})
 	var recovery_batches: Array[Dictionary] = _events_named("cardsGainedBatchAfter")
-	if recovery_move == null or recovery_batches.size() != 1 or int((recovery_batches[0]["data"] as Dictionary).get("batch_size", -1)) != 1:
-		return _fail("cancel_recovery move=%s batches=%d" % [recovery_move != null, recovery_batches.size()])
+	if recovery_move.count != 1 or recovery_batches.size() != 1 or int((recovery_batches[0]["data"] as Dictionary).get("batch_size", -1)) != 1:
+		return _fail("cancel_recovery move=%s batches=%d" % [recovery_move.count == 1, recovery_batches.size()])
 	return true
 
 
@@ -257,12 +258,13 @@ func _test_nested_gain_forms_own_batch() -> bool:
 	_controller.event_bus.subscribe("cardsGainedBatchAfter", self, _trigger_nested_gain, 100)
 	# 外层获得；其批次事件内部会再触发一次获得。
 	var outer_card: CardInstance = _new_card_in_draw_pile("shan", "club", 14)
-	var outer_move: CardMoveEvent = _controller._move_card_with_timings(outer_card, "hand", 1, "batch_nested_outer", _root_event_id)
+	# 外层获得结果；内层批次有独立ID与成员。
+	var outer_move: CardMoveResolutionService = _controller.begin_card_move(outer_card.uid, "hand", 1, "batch_nested_outer", {"event_id":_root_event_id})
 	_nested_trigger_armed = false
 	# 按 reason 定位两个批次，不依赖派发顺序，避免优先级变化导致断言脆弱。
 	var outer_batch: Dictionary = _event_by_reason("cardsGainedBatchAfter", "batch_nested_outer")
 	var inner_batch: Dictionary = _event_by_reason("cardsGainedBatchAfter", "batch_nested_inner")
-	if outer_move == null or outer_batch.is_empty() or inner_batch.is_empty():
+	if outer_move.count != 1 or outer_batch.is_empty() or inner_batch.is_empty():
 		return _fail("nested_missing names=%s" % [_captured_names])
 	# 外层批次只能包含外层那 1 张牌，内层牌不得被计入外层。
 	var outer_payload: Dictionary = outer_batch["data"] as Dictionary
@@ -273,8 +275,8 @@ func _test_nested_gain_forms_own_batch() -> bool:
 		return _fail("nested_batch_id_reused=%s" % [outer_payload])
 	if int(outer_payload.get("gain_batch_id", -1)) <= 0 or int(inner_payload.get("gain_batch_id", -1)) <= 0:
 		return _fail("nested_batch_id_invalid outer=%s inner=%s" % [outer_payload, inner_payload])
-	if not _controller._gain_batch_stack.is_empty():
-		return _fail("nested_stack_not_empty=%d" % _controller._gain_batch_stack.size())
+	if not _controller._rule_sequences.is_empty():
+		return _fail("nested_stack_not_empty=%d" % _controller._rule_sequences.size())
 	return true
 
 
@@ -285,7 +287,7 @@ func _trigger_nested_gain(_event: RuleEvent) -> void:
 	_nested_trigger_done = true
 	# 内层牌；由独立的一次移牌动作进入手牌，因此必须自成一个新批次。
 	var nested_card: CardInstance = _new_card_in_draw_pile("sha", "heart", 15)
-	_controller._move_card_with_timings(nested_card, "hand", 1, "batch_nested_inner", _root_event_id)
+	_controller.begin_card_move(nested_card.uid, "hand", 1, "batch_nested_inner", {"event_id":_root_event_id})
 
 
 ## 清空旧捕获并重新订阅指定时机；只记录真实派发到总线的事件。
@@ -360,7 +362,7 @@ func _clear_hand_for_test(player: PlayerState) -> void:
 		# 当前实体；已经离开手牌区的牌安全跳过。
 		var card: CardInstance = player.find_hand_card(card_uid)
 		if card != null:
-			_controller._move_card_with_timings(card, "discard_pile", -1, "batch_test_cleanup", _root_event_id)
+			_controller.begin_card_move(card.uid, "discard_pile", -1, "batch_test_cleanup", {"event_id":_root_event_id})
 
 
 ## 输出稳定失败原因并以非0状态结束测试；返回 false 便于调用方立即终止后续断言。

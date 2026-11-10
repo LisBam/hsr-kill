@@ -329,7 +329,7 @@ func _test_recast_is_neither_discard_nor_play() -> bool:
 		return _fail("recast_card_missing")
 	# 重铸前的摸牌堆张数；重铸固定补摸一张牌，用于断言摸牌确实发生。
 	var draw_pile_count_before: int = _controller.state.draw_pile.size()
-	if not _controller.recast_hand_card(0, recast_card.uid):
+	if _controller.recast_hand_card(0, recast_card.uid).count != 1:
 		return _fail("recast_rejected")
 	if not _controller.state.discard_pile.has(recast_card):
 		return _fail("recast_not_in_discard")

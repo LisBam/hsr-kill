@@ -144,7 +144,6 @@ func _reset_state(player_count: int) -> void:
 	_controller._started_phase_lifecycles.clear()
 	_controller._clear_pending_judgment_request()
 	_controller._judgment_flow_in_progress = false
-	_controller._judgment_resume_needs_result_pause = false
 	_controller.ai_coordinator._policies.clear()
 	_controller._ai_drive_token += 1
 	_controller._scheduled_ai_drive_token = -1

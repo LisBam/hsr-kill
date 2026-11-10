@@ -36,7 +36,7 @@ func _run() -> void:
 		return
 	if not _test_card_use_lifecycle_order():
 		return
-	print("RULE_TIMING_PASS catalog=237 active=4 roles=4 generation_snapshot=1 damage=16 move=20 card=12")
+	print("RULE_TIMING_PASS catalog=242 active=4 roles=4 generation_snapshot=1 damage=16 move=20 card=12")
 	get_tree().quit(0)
 
 
@@ -115,7 +115,7 @@ func _test_catalog_and_active_entries() -> bool:
 		if unique_names.has(timing_name):
 			return _fail("duplicate_timing=%s" % timing_name)
 		unique_names[timing_name] = true
-	if timing_names.size() != 237 or unique_names.size() != 237:
+	if timing_names.size() != 242 or unique_names.size() != 242:
 		return _fail("catalog_count=%d/%d" % [timing_names.size(), unique_names.size()])
 	# 各分类实际数量；严格对应制作指南逐项列出的名称。
 	var category_sizes: Array[int] = [
@@ -131,7 +131,8 @@ func _test_catalog_and_active_entries() -> bool:
 		RuleTimingCatalog.MODE_TIMINGS.size(),
 	]
 	# 各分类预期数量；新增批量获得时机 cardsGainedBatchAfter 后，牌移动分类由37增至38，总和固定为237。
-	var expected_category_sizes: Array[int] = [58, 48, 16, 35, 38, 10, 14, 8, 4, 6]
+	# 重铸专属5个窗口纳入移牌分类，实际目录为242项、移牌分类43项。
+	var expected_category_sizes: Array[int] = [58, 48, 16, 35, 43, 10, 14, 8, 4, 6]
 	if category_sizes != expected_category_sizes:
 		return _fail("category_sizes=%s" % [category_sizes])
 	# 标准主动入口顺序；内容协议按出牌、使用、响应和选牌顺序保持稳定。
@@ -260,9 +261,9 @@ func _test_draw_and_move_order() -> bool:
 	var expected_discard_order: Array[String] = ["loseBefore", "discardBefore", "loseBegin", "discardBegin", "loseEnd", "discardEnd", "cardsDiscardEnd", "loseAfter", "discardAfter", "cardsDiscardAfter", "loseToDiscardpileAfter"]
 	_subscribe_capture(expected_discard_order)
 	# 弃置移动结果；空值表示前置时机或区域校验错误地阻止了有效移动。
-	var discard_move: CardMoveEvent = _controller._move_card_with_timings(card, "discard_pile", -1, "rule_timing_test", _root_event_id)
-	if discard_move == null or _captured_timings != expected_discard_order or not _controller.state.discard_pile.has(card):
-		return _fail("discard_order=%s move=%s" % [_captured_timings, discard_move != null])
+	var discard_move: CardMoveResolutionService = _controller.begin_card_move(card.uid, "discard_pile", -1, "rule_timing_test", {"event_id":_root_event_id})
+	if discard_move.count != 1 or _captured_timings != expected_discard_order or not _controller.state.discard_pile.has(card):
+		return _fail("discard_order=%s move=%s" % [_captured_timings, discard_move.count == 1])
 	_controller.event_bus.unsubscribe_owner(self)
 	return true
 

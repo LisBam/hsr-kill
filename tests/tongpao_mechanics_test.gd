@@ -27,6 +27,8 @@ func _run() -> void:
 		return
 	if not _test_tongpao_section_three_discards_hand_card():
 		return
+	if not _test_tongpao_cancelled_hand_cost():
+		return
 	if not _test_tongpao_section_four_discards_zone_card():
 		return
 	if not _test_tongpao_empty_section_still_advances():
@@ -428,3 +430,21 @@ func _fail(reason: String) -> bool:
 		printerr("TONGPAO_MECHANICS_FAIL %s" % reason)
 		get_tree().quit(1)
 	return false
+
+
+## 第三节费用被前置取消时保留本节和手牌，释放暂存发动归属。
+func _test_tongpao_cancelled_hand_cost() -> bool:
+	_reset_state(2)
+	_controller.state.get_player(0).shield = 1
+	# 第三节唯一手牌；不让空节规则替代实际费用。
+	var card: CardInstance = _add_hand_card(0, "shan", "heart", 3)
+	# 正式同袍；先执行第一、二节后进入费用节。
+	var skill: SkillDefinition = _install_single_skill(0, "tongpao")
+	if skill == null or not skill.activate().is_empty() or not skill.activate({"target_ids":[1]}).is_empty():
+		return _fail("tongpao_cancel_setup")
+	_controller.trigger_manager.subscribe("discardBefore", self, func(event: RuleEvent) -> void: event.cancel("test_cancel_cost"))
+	if not skill.activate({"card_uid":card.uid}).is_empty():
+		return _fail("tongpao_cancel_activation")
+	if skill.get_reincarnation_section_index() != 2 or int(skill.get_reincarnation_state().get("pending_activation_section_index", -1)) != -1 or not _controller.state.get_player(0).hand.has(card):
+		return _fail("tongpao_cancel_left_pending=%s" % skill.get_reincarnation_state())
+	return true
