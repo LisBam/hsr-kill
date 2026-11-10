@@ -1,6 +1,12 @@
 class_name OnlineSettingsPanel
 extends Control
 
+## 局外样式工厂；只改变菜单表现，正式牌面与战斗界面保持独立。
+const MENU_STYLE: Script = preload("res://scripts/ui/menu_visual_style.gd")
+
+## 局外过渡服务；由首页子节点提供，独立复用本面板时安全回退同步交互。
+const MENU_MOTION: Script = preload("res://scripts/ui/menu_motion.gd")
+
 ## 联机资料设置组件。该组件只编辑跨大厅复用的玩家名称与武将形象，作为主菜单客户区内容页展示，布局与模式选择页同款左右分栏，不创建网络连接或修改对局状态。
 
 ## 玩家保存资料或取消返回时发出的关闭请求；主菜单据此切回模式选择内容页，不依赖组件内部节点路径。
@@ -163,6 +169,7 @@ func _ready() -> void:
 ## 打开联机资料设置内容页；每次从全局设置重新载入名称与形象，保证取消后再次进入不会保留未提交内容。
 func open_panel() -> void:
 	visible = true
+	MENU_MOTION.enter(self)
 	move_to_front()
 	_loading_cover.call("set_loading", true, _avatar_scroll)
 	_player_name_input.text = GameSettings.online_player_name
@@ -178,6 +185,7 @@ func open_panel() -> void:
 func refresh_ui_style() -> void:
 	if not is_node_ready():
 		return
+	BattleUIStyle.apply_main_menu_scroll_bar_style(_avatar_scroll.get_v_scroll_bar())
 	_backdrop.color = BattleUIStyle.get_color("shade")
 	_panel.add_theme_stylebox_override("panel", _make_frame_panel())
 	_side_list.add_theme_stylebox_override("panel", _make_flat_inner_panel(BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border")))
@@ -193,10 +201,10 @@ func refresh_ui_style() -> void:
 	_selected_avatar_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	(%OnlinePlayerNameLabel as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	(%OnlineAvatarLabel as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
-	BattleUIStyle.apply_interaction_button(_profile_section_button, BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), true)
+	MENU_STYLE.apply_interaction_button(_profile_section_button, BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), true)
 	_apply_line_edit_style(_player_name_input)
-	BattleUIStyle.apply_interaction_button(_save_button, BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), true)
-	BattleUIStyle.apply_interaction_button(_cancel_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
+	MENU_STYLE.apply_interaction_button(_save_button, BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), true)
+	MENU_STYLE.apply_interaction_button(_cancel_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
 	for avatar_view_variant: Variant in _avatar_views.values():
 		# 当前武将形象牌面；只刷新主题颜色，临时选择与布局保持不变。
 		var avatar_view: PlayerTargetView = avatar_view_variant as PlayerTargetView
@@ -386,8 +394,8 @@ func _clear_avatar_options() -> void:
 
 ## 为玩家名称输入框应用当前主题的常态与焦点边框；文本编辑行为仍由 Godot LineEdit 管理。
 func _apply_line_edit_style(line_edit: LineEdit) -> void:
-	line_edit.add_theme_stylebox_override("normal", BattleUIStyle.make_decade_button(BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false))
-	line_edit.add_theme_stylebox_override("focus", BattleUIStyle.make_decade_button(BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), true))
+	line_edit.add_theme_stylebox_override("normal", MENU_STYLE.make_decade_button(BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false))
+	line_edit.add_theme_stylebox_override("focus", MENU_STYLE.make_decade_button(BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), true))
 	line_edit.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	line_edit.add_theme_color_override("caret_color", BattleUIStyle.get_color("accent"))
 	line_edit.add_theme_color_override("selection_color", Color(BattleUIStyle.get_color("accent"), 0.42))
@@ -395,13 +403,13 @@ func _apply_line_edit_style(line_edit: LineEdit) -> void:
 
 ## 创建与主菜单外框一致的内嵌面板；保留主题阴影，保证联机设置页与模式选择页外框观感统一。
 func _make_frame_panel() -> StyleBoxFlat:
-	return BattleUIStyle.make_inset_panel(BattleUIStyle.get_color("rail"), BattleUIStyle.get_color("border"), 2, 8)
+	return MENU_STYLE.make_inset_panel(BattleUIStyle.get_color("rail"), BattleUIStyle.get_color("border"), 2, 8)
 
 
 ## 创建没有重复阴影的内层面板；外框保留唯一强阴影，内部只用细边区分内容层级。
 func _make_flat_inner_panel(background_color: Color, border_color: Color, border_width: int = 1, corner_radius: int = 5) -> StyleBoxFlat:
 	# 内层面板样式；复用主题工厂的边距与圆角后移除阴影，避免多层金框产生视觉噪声。
-	var style: StyleBoxFlat = BattleUIStyle.make_panel(background_color, border_color, border_width, corner_radius)
+	var style: StyleBoxFlat = MENU_STYLE.make_panel(background_color, border_color, border_width, corner_radius)
 	style.shadow_size = 0
 	style.shadow_offset = Vector2.ZERO
 	return style

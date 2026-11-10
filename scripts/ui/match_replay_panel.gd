@@ -1,6 +1,12 @@
 class_name MatchReplayPanel
 extends Control
 
+## 局外样式工厂；只改变菜单表现，正式牌面与战斗界面保持独立。
+const MENU_STYLE: Script = preload("res://scripts/ui/menu_visual_style.gd")
+
+## 局外过渡服务；由首页子节点提供，独立复用本面板时安全回退同步交互。
+const MENU_MOTION: Script = preload("res://scripts/ui/menu_motion.gd")
+
 ## 主菜单“对局回放”内容页组件。左侧列出本地已保存的 .lisbam_replay 回放并提供导入入口，
 ## 右侧展示所选回放的资料与播放、重命名、顶置、导出、删除操作。
 ## 点击“播放”只发出播放意图信号；实际回放重演由牌桌以第一视角在正式对局界面完成，
@@ -110,6 +116,7 @@ func _ready() -> void:
 ## 打开内容页；刷新回放列表并聚焦主控件，与其他主菜单内容页保持同一打开契约。
 func open_panel() -> void:
 	visible = true
+	MENU_MOTION.enter(self)
 	move_to_front()
 	refresh_replay_list()
 	refresh_ui_style()
@@ -118,7 +125,7 @@ func open_panel() -> void:
 
 ## 关闭内容页；共享模态一并收起，选中状态保留供下次打开恢复详情。
 func close_panel() -> void:
-	_close_path_modal()
+	_close_path_modal(false)
 	visible = false
 
 
@@ -169,7 +176,16 @@ func refresh_replay_list() -> void:
 func refresh_ui_style() -> void:
 	if _frame == null:
 		return
-	_frame.add_theme_stylebox_override("panel", BattleUIStyle.make_panel(BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), 2, 10))
+	# 左右内容层独立于外框；空列表与有回放时保持相同层次，不退回Godot默认面板。
+	var side_panel: PanelContainer = _browser_content.get_node_or_null("ReplaySidePanel") as PanelContainer
+	if side_panel != null:
+		side_panel.add_theme_stylebox_override("panel", MENU_STYLE.make_panel(BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border")))
+	_modal_path_input.add_theme_stylebox_override("normal", MENU_STYLE.make_decade_button(BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border")))
+	_modal_path_input.add_theme_stylebox_override("focus", MENU_STYLE.make_decade_button(BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("accent"), true))
+	_modal_path_input.add_theme_color_override("caret_color", BattleUIStyle.get_color("accent"))
+	_modal_path_input.add_theme_color_override("selection_color", Color(BattleUIStyle.get_color("accent"), 0.35))
+	BattleUIStyle.apply_main_menu_scroll_bar_style(_list_scroll.get_v_scroll_bar())
+	_frame.add_theme_stylebox_override("panel", MENU_STYLE.make_panel(BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), 2, 10))
 	_side_title_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	_list_hint_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	_detail_title_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
@@ -178,15 +194,15 @@ func refresh_ui_style() -> void:
 	_modal_title_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	_modal_hint_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	_modal_path_input.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
-	_modal_panel.add_theme_stylebox_override("panel", BattleUIStyle.make_panel(BattleUIStyle.get_color("metal_panel"), BattleUIStyle.get_color("accent"), 2, 10))
-	BattleUIStyle.apply_interaction_button(_import_button)
-	BattleUIStyle.apply_interaction_button(_play_button)
-	BattleUIStyle.apply_interaction_button(_rename_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
-	BattleUIStyle.apply_interaction_button(_pin_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
-	BattleUIStyle.apply_interaction_button(_export_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
-	BattleUIStyle.apply_interaction_button(_delete_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("danger"), false)
-	BattleUIStyle.apply_interaction_button(_modal_confirm_button)
-	BattleUIStyle.apply_interaction_button(_modal_cancel_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
+	_modal_panel.add_theme_stylebox_override("panel", MENU_STYLE.make_panel(BattleUIStyle.get_color("metal_panel"), BattleUIStyle.get_color("accent"), 2, 10))
+	MENU_STYLE.apply_interaction_button(_import_button)
+	MENU_STYLE.apply_interaction_button(_play_button)
+	MENU_STYLE.apply_interaction_button(_rename_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
+	MENU_STYLE.apply_interaction_button(_pin_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
+	MENU_STYLE.apply_interaction_button(_export_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
+	MENU_STYLE.apply_interaction_button(_delete_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("danger"), false)
+	MENU_STYLE.apply_interaction_button(_modal_confirm_button)
+	MENU_STYLE.apply_interaction_button(_modal_cancel_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
 	for entry_button_variant: Variant in _entry_buttons.values():
 		# 当前列表条目按钮；选中条目使用强调描边，普通条目使用面板底色。
 		var entry_button: Button = entry_button_variant as Button
@@ -194,7 +210,7 @@ func refresh_ui_style() -> void:
 			continue
 		# 该按钮是否为当前选中条目；决定描边强调色。
 		var is_selected: bool = str((entry_button.get_meta("replay_entry", {}) as Dictionary).get("file_name", "")) == str(_selected_entry.get("file_name", ""))
-		BattleUIStyle.apply_interaction_button(entry_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("accent") if is_selected else BattleUIStyle.get_color("border"), is_selected)
+		MENU_STYLE.apply_interaction_button(entry_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("accent") if is_selected else BattleUIStyle.get_color("border"), is_selected)
 
 
 ## Esc 关闭链；优先关闭输入模态，其次交还整页关闭意图。
@@ -227,6 +243,7 @@ func _build_browser_content() -> void:
 	_frame.add_child(_browser_content)
 	# 左侧列表面板；固定286像素宽与“所有卡牌”侧栏对齐。
 	var side_panel: PanelContainer = PanelContainer.new()
+	side_panel.name = "ReplaySidePanel"
 	side_panel.custom_minimum_size = Vector2(286.0, 0.0)
 	_browser_content.add_child(side_panel)
 	# 左侧纵向布局；标题、导入按钮、数量提示与滚动列表。
@@ -275,6 +292,8 @@ func _build_browser_content() -> void:
 	_detail_body_label = Label.new()
 	_detail_body_label.name = "ReplayDetailBody"
 	_detail_body_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_detail_body_label.add_theme_font_size_override("font_size", 17)
+	_detail_body_label.add_theme_constant_override("line_spacing", 8)
 	_detail_body_label.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_detail_body_label.vertical_alignment = VERTICAL_ALIGNMENT_TOP
 	detail_vbox.add_child(_detail_body_label)
@@ -558,11 +577,14 @@ func _open_path_modal(modal_mode: String) -> void:
 		_modal_path_input.text = "%s/%s" % [desktop_directory, str(_selected_entry.get("file_name", ""))] if not desktop_directory.is_empty() else str(_selected_entry.get("file_name", ""))
 	_modal_backdrop.visible = true
 	_modal_panel.visible = true
+	MENU_MOTION.enter(_modal_panel, "modal")
 	_modal_path_input.grab_focus()
 
 
 ## 关闭输入模态；不执行任何文件操作。
-func _close_path_modal() -> void:
+func _close_path_modal(animate: bool = true) -> void:
+	if animate and MENU_MOTION.try_close(_modal_panel, _close_path_modal):
+		return
 	_modal_mode = ""
 	if _modal_backdrop != null:
 		_modal_backdrop.visible = false

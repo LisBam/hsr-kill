@@ -1,0 +1,10 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/ui/menu_presentation.gd" id="1_presentation"]
+[ext_resource type="Script" path="res://scripts/ui/menu_motion.gd" id="2_motion"]
+
+[node name="MenuPresentation" type="Node"]
+script = ExtResource("1_presentation")
+
+[node name="Motion" type="Node" parent="."]
+script = ExtResource("2_motion")

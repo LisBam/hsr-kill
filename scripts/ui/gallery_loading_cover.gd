@@ -13,6 +13,8 @@ func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	_status_label = Label.new()
 	_status_label.text = "正在准备内容…"
+	# 首次打开之前也提供主题字体色，隐藏的加载提示不能依赖set_loading才完成视觉初始化。
+	_status_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	_status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_status_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_status_label.mouse_filter = Control.MOUSE_FILTER_IGNORE

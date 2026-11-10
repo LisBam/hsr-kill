@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48">
+  <!-- 白色矢量罗盘由控件按主题强调色调制；透明背景，不携带额外位图。 -->
+  <g fill="none" stroke="#ffffff" stroke-width="1">
+    <circle cx="24" cy="24" r="18" opacity="0.32"/>
+    <path d="M24 3 L45 24 L24 45 L3 24 Z" opacity="0.62"/>
+    <path d="M24 9 L28 20 L39 24 L28 28 L24 39 L20 28 L9 24 L20 20 Z"/>
+  </g>
+  <path d="M24 18 L30 24 L24 30 L18 24 Z" fill="#ffffff"/>
+</svg>

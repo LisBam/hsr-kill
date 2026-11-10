@@ -1,6 +1,12 @@
 class_name AllCardsPanel
 extends Control
 
+## 局外样式工厂；只改变菜单表现，正式牌面与战斗界面保持独立。
+const MENU_STYLE: Script = preload("res://scripts/ui/menu_visual_style.gd")
+
+## 局外过渡服务；由首页子节点提供，独立复用本面板时安全回退同步交互。
+const MENU_MOTION: Script = preload("res://scripts/ui/menu_motion.gd")
+
 ## 主菜单“所有卡牌”内容页。组件只读取静态武将、游戏牌与机缘目录，负责分类浏览、全文搜索和资料展示，不创建对局状态或复制规则数据源。
 
 ## 玩家从“所有卡牌”页请求返回模式选择页时发出的信号；主菜单负责切换顶部导航和客户区。
@@ -297,6 +303,7 @@ func _ready() -> void:
 ## 打开“所有卡牌”内容页；重新读取三类静态目录，使开发期数据库重载后的新增内容立即进入图鉴。
 func open_panel() -> void:
 	visible = true
+	MENU_MOTION.enter(self)
 	move_to_front()
 	_loading_cover.call("set_loading", true, _grid_scroll)
 	_close_information(false)
@@ -315,13 +322,13 @@ func open_panel() -> void:
 func refresh_ui_style() -> void:
 	if not is_node_ready():
 		return
-	_frame.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel(BattleUIStyle.get_color("rail"), BattleUIStyle.get_color("border"), 2, 8))
+	_frame.add_theme_stylebox_override("panel", MENU_STYLE.make_inset_panel(BattleUIStyle.get_color("rail"), BattleUIStyle.get_color("border"), 2, 8))
 	_side_list.add_theme_stylebox_override("panel", _make_flat_inner_panel(BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border")))
 	_detail_panel.add_theme_stylebox_override("panel", _make_flat_inner_panel(BattleUIStyle.get_color("metal_panel"), BattleUIStyle.get_color("border")))
 	_detail_surface.color = BattleUIStyle.get_color("table_surface")
 	_detail_shade.color = Color(BattleUIStyle.get_color("panel"), detail_shade_opacity)
 	_information_backdrop.color = Color(BattleUIStyle.get_color("shade"), information_backdrop_opacity)
-	_information_panel.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel())
+	_information_panel.add_theme_stylebox_override("panel", MENU_STYLE.make_inset_panel())
 	(%AllCardsSideListTitle as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	for category_label: Label in [
 		%AllCharactersTabName as Label,
@@ -351,7 +358,7 @@ func refresh_ui_style() -> void:
 	for skill_description_label: SkillDescriptionView in _information_skill_description_labels:
 		if skill_description_label != null and is_instance_valid(skill_description_label):
 			skill_description_label.refresh_ui_style()
-	BattleUIStyle.apply_interaction_button(_information_close_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("accent"), false)
+	MENU_STYLE.apply_interaction_button(_information_close_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("accent"), false)
 	_apply_scroll_bar_style(_grid_scroll.get_v_scroll_bar())
 	_apply_scroll_bar_style(_information_scroll.get_v_scroll_bar())
 	_apply_scroll_bar_style(_information_character_skill_scroll.get_v_scroll_bar())
@@ -684,6 +691,8 @@ func _open_information(category_id: String, entry_id: String) -> void:
 		_information_character_body.visible = false
 		_information_scroll.visible = true
 	_information_backdrop.visible = true
+	MENU_MOTION.enter(_information_backdrop, "fade")
+	MENU_MOTION.enter(_information_panel, "modal")
 	_information_backdrop.move_to_front()
 	_information_close_button.grab_focus()
 
@@ -696,6 +705,8 @@ func _on_opportunity_card_selected(card_id: String) -> void:
 ## 关闭当前完整资料；可选择恢复搜索焦点，页面整体关闭时不会抢占新的顶部导航焦点。
 func _close_information(restore_focus: bool = true) -> void:
 	if _information_backdrop == null:
+		return
+	if restore_focus and MENU_MOTION.try_close(_information_backdrop, _close_information):
 		return
 	_information_backdrop.visible = false
 	_clear_information_character_content()
@@ -1052,7 +1063,7 @@ func _clear_entries() -> void:
 ## 刷新三个分类按钮的当前主题交互样式；选中页使用强调边框和持续按下态。
 func _refresh_category_button_styles() -> void:
 	for category_button: Button in [_characters_tab_button, _game_cards_tab_button, _opportunities_tab_button]:
-		BattleUIStyle.apply_interaction_button(
+		MENU_STYLE.apply_interaction_button(
 			category_button,
 			BattleUIStyle.get_color("action_button"),
 			BattleUIStyle.get_color("accent") if category_button.button_pressed else BattleUIStyle.get_color("border"),
@@ -1062,8 +1073,8 @@ func _refresh_category_button_styles() -> void:
 
 ## 为搜索输入框应用当前主题常态与焦点样式；文本选择区使用半透明强调色。
 func _apply_line_edit_style(line_edit: LineEdit) -> void:
-	line_edit.add_theme_stylebox_override("normal", BattleUIStyle.make_decade_button(BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false))
-	line_edit.add_theme_stylebox_override("focus", BattleUIStyle.make_decade_button(BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), true))
+	line_edit.add_theme_stylebox_override("normal", MENU_STYLE.make_decade_button(BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false))
+	line_edit.add_theme_stylebox_override("focus", MENU_STYLE.make_decade_button(BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), true))
 	line_edit.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	line_edit.add_theme_color_override("font_placeholder_color", BattleUIStyle.get_color("text_muted"))
 	line_edit.add_theme_color_override("caret_color", BattleUIStyle.get_color("accent"))
@@ -1078,7 +1089,7 @@ func _apply_scroll_bar_style(scroll_bar: VScrollBar) -> void:
 ## 创建没有重复阴影的内层面板；图鉴外框保留唯一强阴影，内部只用细边区分内容。
 func _make_flat_inner_panel(background_color: Color, border_color: Color, border_width: int = 1, corner_radius: int = 5) -> StyleBoxFlat:
 	# 当前内层面板样式；复用主题工厂后移除阴影，避免多重外框产生视觉噪声。
-	var style: StyleBoxFlat = BattleUIStyle.make_panel(background_color, border_color, border_width, corner_radius)
+	var style: StyleBoxFlat = MENU_STYLE.make_panel(background_color, border_color, border_width, corner_radius)
 	style.shadow_size = 0
 	style.shadow_offset = Vector2.ZERO
 	return style

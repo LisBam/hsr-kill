@@ -1,6 +1,12 @@
 class_name MainMenu
 extends Control
 
+## 局外样式工厂；只改变菜单表现，正式牌面与战斗界面保持独立。
+const MENU_STYLE: Script = preload("res://scripts/ui/menu_visual_style.gd")
+
+## 局外过渡服务；由首页子节点提供，独立复用本面板时安全回退同步交互。
+const MENU_MOTION: Script = preload("res://scripts/ui/menu_motion.gd")
+
 ## 主菜单组件。该组件只管理启动前的模式选择、显示设置与开局请求，不直接创建或修改任何对局状态。
 
 ## 玩家确认开始身份局时发出的信号；参数为设置中确认的下一局人数，由牌桌统一调用对局控制器。
@@ -630,17 +636,17 @@ func refresh_ui_style() -> void:
 		return
 	_menu_background.color = BattleUIStyle.get_color("outer_background")
 	_menu_surface.color = BattleUIStyle.get_color("table_surface")
-	_top_navigation.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel(BattleUIStyle.get_color("rail"), BattleUIStyle.get_color("border"), 2, 8))
-	_main_frame.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel(BattleUIStyle.get_color("rail"), BattleUIStyle.get_color("border"), 2, 8))
+	_top_navigation.add_theme_stylebox_override("panel", MENU_STYLE.make_inset_panel(BattleUIStyle.get_color("rail"), BattleUIStyle.get_color("border"), 2, 8))
+	_main_frame.add_theme_stylebox_override("panel", MENU_STYLE.make_inset_panel(BattleUIStyle.get_color("rail"), BattleUIStyle.get_color("border"), 2, 8))
 	_mode_list.add_theme_stylebox_override("panel", _make_flat_inner_panel(BattleUIStyle.get_color("mode_list_panel", BattleUIStyle.get_color("panel")), BattleUIStyle.get_color("border")))
 	_apply_mode_scroll_bar_style()
 	_preview_panel.add_theme_stylebox_override("panel", _make_flat_inner_panel(BattleUIStyle.get_color("metal_panel"), BattleUIStyle.get_color("border")))
 	_preview_mode_badge.add_theme_stylebox_override("panel", _make_flat_inner_panel(Color(BattleUIStyle.get_color("metal_panel"), 1.0), BattleUIStyle.get_color("border"), 1, 0))
 	_mode_summary_panel.add_theme_stylebox_override("panel", _make_flat_inner_panel(Color(BattleUIStyle.get_color("metal_panel"), preview_summary_opacity), BattleUIStyle.get_color("border")))
 	_action_panel.add_theme_stylebox_override("panel", _make_flat_inner_panel(Color(BattleUIStyle.get_color("metal_panel"), preview_action_opacity), BattleUIStyle.get_color("accent"), 1, 0))
-	_settings_panel.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel())
+	_settings_panel.add_theme_stylebox_override("panel", MENU_STYLE.make_inset_panel())
 	if _mode_details_panel != null:
-		_mode_details_panel.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel())
+		_mode_details_panel.add_theme_stylebox_override("panel", MENU_STYLE.make_inset_panel())
 	_preview_shade.color = Color(BattleUIStyle.get_color("panel"), preview_shade_opacity)
 	_settings_backdrop.color = Color(BattleUIStyle.get_color("shade"), settings_backdrop_opacity)
 	if _mode_details_backdrop != null:
@@ -665,21 +671,21 @@ func refresh_ui_style() -> void:
 	_apply_mode_button_style(_opportunity_brawl_mode_button)
 	_apply_mode_button_style(_conquest_mode_button)
 	_apply_mode_button_style(_winner_takes_all_mode_button)
-	BattleUIStyle.apply_interaction_button(_settings_button, BattleUIStyle.get_color("secondary_button", BattleUIStyle.get_color("panel")), BattleUIStyle.get_color("border"), false)
-	BattleUIStyle.apply_interaction_button(_lan_button, BattleUIStyle.get_color("secondary_button", BattleUIStyle.get_color("panel")), BattleUIStyle.get_color("accent"), false)
-	BattleUIStyle.apply_interaction_button(_start_game_button, BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), true)
-	BattleUIStyle.apply_interaction_button(_settings_close_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
+	MENU_STYLE.apply_interaction_button(_settings_button, BattleUIStyle.get_color("secondary_button", BattleUIStyle.get_color("panel")), BattleUIStyle.get_color("border"), false)
+	MENU_STYLE.apply_interaction_button(_lan_button, BattleUIStyle.get_color("secondary_button", BattleUIStyle.get_color("panel")), BattleUIStyle.get_color("accent"), false)
+	MENU_STYLE.apply_interaction_button(_start_game_button, BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), true)
+	MENU_STYLE.apply_interaction_button(_settings_close_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
 	if _mode_details_button != null:
-		BattleUIStyle.apply_interaction_button(_mode_details_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("accent"), false)
+		MENU_STYLE.apply_interaction_button(_mode_details_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("accent"), false)
 	if _mode_details_close_button != null:
-		BattleUIStyle.apply_interaction_button(_mode_details_close_button, BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), true)
-	BattleUIStyle.apply_interaction_button(_card_name_option, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
-	BattleUIStyle.apply_interaction_button(_ui_style_option, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
-	BattleUIStyle.apply_interaction_button(_mulligan_limit_option, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
-	BattleUIStyle.apply_interaction_button(_character_replacement_count_option, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
-	BattleUIStyle.apply_interaction_button(_character_candidate_count_option, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
-	BattleUIStyle.apply_interaction_button(_conquest_difficulty_option, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
-	BattleUIStyle.apply_interaction_button(_conquest_opportunity_choice_option, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
+		MENU_STYLE.apply_interaction_button(_mode_details_close_button, BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), true)
+	MENU_STYLE.apply_interaction_button(_card_name_option, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
+	MENU_STYLE.apply_interaction_button(_ui_style_option, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
+	MENU_STYLE.apply_interaction_button(_mulligan_limit_option, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
+	MENU_STYLE.apply_interaction_button(_character_replacement_count_option, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
+	MENU_STYLE.apply_interaction_button(_character_candidate_count_option, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
+	MENU_STYLE.apply_interaction_button(_conquest_difficulty_option, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
+	MENU_STYLE.apply_interaction_button(_conquest_opportunity_choice_option, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
 	_mode_title.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	_mode_title.add_theme_color_override("font_outline_color", BattleUIStyle.get_color("outer_background"))
 	_mode_description.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
@@ -1250,6 +1256,7 @@ func _open_mode_details() -> void:
 	_mode_details_description_label.text = str(mode_details.get("description", ""))
 	_mode_details_backdrop.visible = true
 	_mode_details_panel.visible = true
+	MENU_MOTION.enter(_mode_details_panel, "modal")
 	_suspend_background_focus(_mode_details_panel)
 	_mode_details_close_button.grab_focus()
 
@@ -1257,6 +1264,8 @@ func _open_mode_details() -> void:
 ## 关闭模式详情并恢复主菜单焦点；可选参数用于页面切换或主菜单退出时避免抢占新入口。
 func _close_mode_details(restore_focus: bool = true) -> void:
 	if _mode_details_panel == null or not _mode_details_panel.visible:
+		return
+	if restore_focus and MENU_MOTION.try_close(_mode_details_panel, _close_mode_details):
 		return
 	_mode_details_backdrop.visible = false
 	_mode_details_panel.visible = false
@@ -1408,6 +1417,8 @@ func _open_lan_panel() -> void:
 
 ## 关闭设置浮层；已经写入 GameSettings 的配置立即保留，不需要额外确认按钮。
 func _close_settings() -> void:
+	if MENU_MOTION.try_close(_settings_panel, _close_settings):
+		return
 	MobileKeyboardGuard.release_text_focus_and_hide(get_viewport())
 	_set_settings_visible(false)
 	_settings_button.grab_focus()
@@ -1415,6 +1426,8 @@ func _close_settings() -> void:
 
 ## 关闭联机资料设置内容页并恢复模式选择内容；可选参数用于切换到其他页面时避免抢占新入口焦点。
 func _close_online_settings(restore_focus: bool = true) -> void:
+	if restore_focus and MENU_MOTION.try_close(_online_settings_panel, _close_online_settings):
+		return
 	MobileKeyboardGuard.release_text_focus_and_hide(get_viewport())
 	# 未打开联机设置时不重置其他对等内容页；生命周期清理可以安全重复调用。
 	if not _online_settings_panel.visible:
@@ -1430,6 +1443,8 @@ func _close_online_settings(restore_focus: bool = true) -> void:
 
 ## 关闭所有卡牌内容页并恢复模式选择客户区；可选参数用于切换页面时避免抢占新入口焦点。
 func _close_all_cards(restore_focus: bool = true) -> void:
+	if restore_focus and MENU_MOTION.try_close(_all_cards_panel, _close_all_cards):
+		return
 	MobileKeyboardGuard.release_text_focus_and_hide(get_viewport())
 	# 未打开图鉴时保持当前其他内容页不变，允许主菜单生命周期重复执行清理。
 	if not _all_cards_panel.visible:
@@ -1449,6 +1464,8 @@ func _is_match_replay_page_visible() -> bool:
 
 ## 关闭对局回放内容页并恢复模式选择客户区；可选参数用于切换页面时避免抢占新入口焦点。
 func _close_match_replay(restore_focus: bool = true) -> void:
+	if restore_focus and MENU_MOTION.try_close(_match_replay_panel, _close_match_replay):
+		return
 	# 未打开回放页时保持当前其他内容页不变，允许主菜单生命周期重复执行清理。
 	if not _is_match_replay_page_visible():
 		return
@@ -1545,6 +1562,8 @@ func restore_after_failed_restart(message: String) -> void:
 func close_lan_panel() -> void:
 	_lan_lobby_panel.visible = false
 	_online_lobby_panel.visible = false
+	# 网络断开已经同步完成，仅对返回后的客户区播放进入动画，不推迟取消连接或关闭房间。
+	MENU_MOTION.enter(_main_frame)
 	_restore_background_focus()
 	call_deferred("_focus_lan_button")
 
@@ -1594,6 +1613,7 @@ func _set_settings_visible(settings_visible: bool) -> void:
 	_settings_backdrop.visible = settings_visible
 	_settings_panel.visible = settings_visible
 	if settings_visible:
+		MENU_MOTION.enter(_settings_panel, "modal")
 		_suspend_background_focus(_settings_panel)
 	else:
 		_restore_background_focus()
@@ -1789,15 +1809,21 @@ func _apply_top_navigation_button_style(button: Button, is_selected: bool) -> vo
 	var background_color: Color = BattleUIStyle.get_color("navigation_button", BattleUIStyle.get_color("panel"))
 	# 顶部导航描边；当前页使用强调色，其他页使用普通边框色。
 	var border_color: Color = BattleUIStyle.get_color("accent") if is_selected else BattleUIStyle.get_color("border")
-	BattleUIStyle.apply_interaction_button(button, background_color, border_color, is_selected)
+	MENU_STYLE.apply_interaction_button(button, background_color, border_color, is_selected)
 	# 持续按下样式；显式恢复主题底色，避免通用按钮工厂的瞬时按压加深污染当前页常驻颜色。
-	button.add_theme_stylebox_override("pressed", BattleUIStyle.make_decade_button(background_color, border_color, is_selected))
+	button.add_theme_stylebox_override("pressed", MENU_STYLE.make_decade_button(background_color, border_color, is_selected))
+	# 顶部使用无框标签与滑动下划线；所有状态保留原边距，切页不会改变按钮宽度。
+	for state_name: StringName in [&"normal", &"hover", &"pressed", &"hover_pressed"]:
+		# 局部导航样式；只去掉顶部标签边框，不改变模式卡或其他页面按钮。
+		var navigation_style: StyleBoxFlat = button.get_theme_stylebox(state_name) as StyleBoxFlat
+		if navigation_style != null:
+			navigation_style.set_border_width_all(0)
 
 
 ## 创建没有重复阴影的内层面板；主框保留唯一强阴影，内部只用细边区分内容层级。
 func _make_flat_inner_panel(background_color: Color, border_color: Color, border_width: int = 1, corner_radius: int = 5) -> StyleBoxFlat:
 	# 内层面板样式；复用主题工厂的边距与圆角后移除阴影，避免多层金框产生视觉噪声。
-	var style: StyleBoxFlat = BattleUIStyle.make_panel(background_color, border_color, border_width, corner_radius)
+	var style: StyleBoxFlat = MENU_STYLE.make_panel(background_color, border_color, border_width, corner_radius)
 	style.shadow_size = 0
 	style.shadow_offset = Vector2.ZERO
 	return style
@@ -1815,8 +1841,10 @@ func _apply_mode_button_style(button: Button) -> void:
 	var selected_background_darkening: float = clampf(float(UIStyleRegistry.get_value(BattleUIStyle.get_active_style_id(), "mode_selected_background_darkening", mode_selected_background_darkening)), 0.0, 0.6)
 	# 模式卡片选中背景色；仅压低亮度，不改变主题提供的石墨灰或木色基调。
 	var selected_background_color: Color = background_color.darkened(selected_background_darkening)
-	BattleUIStyle.apply_interaction_button(button, background_color, border_color, true)
-	button.add_theme_stylebox_override("pressed", BattleUIStyle.make_decade_button(selected_background_color, border_color, true))
+	MENU_STYLE.apply_interaction_button(button, background_color, border_color, true)
+	button.add_theme_stylebox_override("pressed", MENU_STYLE.make_decade_button(selected_background_color, border_color, true))
+	# 未选中的模式卡减少描边亮度，使左侧强调条和选中底色成为持续状态主线索。
+	(button.get_theme_stylebox("normal") as StyleBoxFlat).border_color.a = MENU_STYLE.BUTTON_BORDER_OPACITY
 
 
 ## 为左侧模式列表滚动条应用当前主题；滚动轨道与拖块只负责浏览，不改变模式选择状态。
@@ -1901,8 +1929,8 @@ func _apply_spin_box_style(spin_box: SpinBox) -> void:
 	var line_edit: LineEdit = spin_box.get_line_edit()
 	# 直接指定全局回退字体，保证运行时创建的 SpinBox 编辑框与菜单其余中文控件使用同一字体来源。
 	line_edit.add_theme_font_override("font", ThemeDB.fallback_font)
-	line_edit.add_theme_stylebox_override("normal", BattleUIStyle.make_decade_button(BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false))
-	line_edit.add_theme_stylebox_override("focus", BattleUIStyle.make_decade_button(BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), true))
+	line_edit.add_theme_stylebox_override("normal", MENU_STYLE.make_decade_button(BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false))
+	line_edit.add_theme_stylebox_override("focus", MENU_STYLE.make_decade_button(BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), true))
 	line_edit.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	line_edit.add_theme_color_override("font_selected_color", BattleUIStyle.get_color("text_primary"))
 	line_edit.add_theme_color_override("font_uneditable_color", BattleUIStyle.get_color("text_secondary"))
@@ -1914,8 +1942,8 @@ func _apply_spin_box_style(spin_box: SpinBox) -> void:
 func _apply_option_popup_style(option_button: OptionButton) -> void:
 	# OptionButton 自带的弹出菜单；该节点由 Godot 管理，主菜单只覆盖视觉主题。
 	var popup: PopupMenu = option_button.get_popup()
-	popup.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel())
-	popup.add_theme_stylebox_override("hover", BattleUIStyle.make_decade_button(BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), false))
+	popup.add_theme_stylebox_override("panel", MENU_STYLE.make_inset_panel())
+	popup.add_theme_stylebox_override("hover", MENU_STYLE.make_decade_button(BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), false))
 	popup.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	popup.add_theme_color_override("font_hover_color", BattleUIStyle.get_color("text_primary"))
 	popup.add_theme_color_override("font_disabled_color", BattleUIStyle.get_color("disabled_button_font"))
