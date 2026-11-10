@@ -33,7 +33,10 @@ const FACTIONS_PATH: String = "res://game_data/factions.json"
 const MAX_RESOLVED_CARD_TEXT_CACHE_ENTRIES_PER_MODE: int = 512
 
 ## 以卡牌 ID 为键的卡牌元数据索引；界面、AI、网络与规则查询只读取深拷贝。
-var cards: Dictionary = {}
+var cards: Dictionary = {}:
+	get:
+		_ensure_loaded()
+		return cards
 
 ## 原版牌名或项目牌名到卡牌元数据的只读索引；数据库重载时重建，用于说明文本常数时间解析。
 var _card_definitions_by_display_name: Dictionary = {}
@@ -42,46 +45,162 @@ var _card_definitions_by_display_name: Dictionary = {}
 var _resolved_card_text_cache_by_mode: Dictionary = {}
 
 ## 以卡牌 ID 为键的卡牌源码定义对象；效果解析器通过该索引调用对应卡牌文件的函数。
-var card_definitions: Dictionary = {}
+var card_definitions: Dictionary = {}:
+	get:
+		_ensure_loaded()
+		return card_definitions
 
 ## 以卡牌 ID 为键的卡牌脚本资源索引；装备等持续区域效果会由该脚本创建独立运行时实例。
-var card_scripts: Dictionary = {}
+var card_scripts: Dictionary = {}:
+	get:
+		_ensure_loaded()
+		return card_scripts
 
 ## 以牌堆 ID 为键的牌堆配置索引；牌堆条目只引用卡牌 ID，逻辑不重复存储。
-var decks: Dictionary = {}
+var decks: Dictionary = {}:
+	get:
+		_ensure_loaded()
+		return decks
 
 ## 以武将 ID 为键的武将元数据索引；技能数组由武将源码直接引用的技能脚本自动生成。
-var characters: Dictionary = {}
+var characters: Dictionary = {}:
+	get:
+		_ensure_loaded()
+		return characters
 
 ## 以武将 ID 为键的武将源码定义对象；用于校验技能脚本引用并为工具链提供源码入口。
-var character_definitions: Dictionary = {}
+var character_definitions: Dictionary = {}:
+	get:
+		_ensure_loaded()
+		return character_definitions
 
 ## 以势力 ID 为键的势力展示元数据索引；不参与身份、距离、伤害或胜负规则。
-var factions: Dictionary = {}
+var factions: Dictionary = {}:
+	get:
+		_ensure_loaded()
+		return factions
 
 ## 以技能 ID 为键的技能元数据索引；技能栏、网络与回放只读取该字典的深拷贝。
-var skills: Dictionary = {}
+var skills: Dictionary = {}:
+	get:
+		_ensure_loaded()
+		return skills
 
 ## 以技能 ID 为键的技能脚本资源索引；每局会通过 create_skill 创建互不共享状态的运行时实例。
-var skill_scripts: Dictionary = {}
+var skill_scripts: Dictionary = {}:
+	get:
+		_ensure_loaded()
+		return skill_scripts
 
 ## 以效果 ID 为键的角色持续效果元数据索引；界面与工具链只读取该字典的深拷贝。
-var player_effects: Dictionary = {}
+var player_effects: Dictionary = {}:
+	get:
+		_ensure_loaded()
+		return player_effects
 
 ## 以效果 ID 为键的效果脚本资源索引；对局开始时按角色身上的持久状态重建实例。
-var player_effect_scripts: Dictionary = {}
+var player_effect_scripts: Dictionary = {}:
+	get:
+		_ensure_loaded()
+		return player_effect_scripts
 
 ## 最近一次载入产生的错误列表；为空表示全部源码定义、牌堆和势力引用均可安全使用。
-var validation_errors: Array[String] = []
+var validation_errors: Array[String] = []:
+	get:
+		_ensure_loaded()
+		return validation_errors
 
 
 ## 节点进入场景树时载入全部静态数据，确保其他模块可立即查询。
+## 首页先完成绘制，再由独立数据库副本在后台准备；首次查询会等待完整结果，避免观察到部分数据。
+signal database_ready()
+
+## 后台载入线程；运行期间只操作独立副本，主线程合并前不得读取其容器。
+var _loading_thread: Thread = Thread.new()
+
+## 后台使用的未入树数据库副本；线程结束后由主线程转交索引并释放。
+var _database_copy: Node
+
+## 内容目录的重载版本；每次完整扫描后递增，界面可据此失效旧的牌面缓存。
+var content_revision: int = 0
+
+## 完整数据是否已经提交；默认关闭，提交或同步回退完成后保持开启。
+var _database_loaded: bool = false
+
+## 是否为后台临时副本；默认关闭，副本跳过主线程等待并独立执行原有校验。
+var _is_loader_copy: bool = false
+
+## 同步加载或结果提交是否正在执行；用于避免内部索引访问重复触发初始化。
+var _loading_in_main: bool = false
+
+
 func _ready() -> void:
-	reload_all()
+	# 等待主场景完成首帧，优先让首页得到显示和输入机会。
+	await get_tree().process_frame
+	await get_tree().process_frame
+	if not _database_loaded:
+		_start_background_load()
+
+
+## 返回完整目录是否已经提交；界面用它判断是否需要展示等待提示。
+func is_database_ready() -> bool:
+	return _database_loaded
+
+
+## 等待完整内容目录；界面入口可使用信号异步等待，不阻塞已经显示的首页。
+func wait_until_ready() -> void:
+	if not _database_loaded:
+		await database_ready
+
+
+## 开始在独立副本中加载目录；线程不可用时同步回退，保持数据正确性。
+func _start_background_load() -> void:
+	if _database_loaded or _loading_thread.is_started():
+		return
+	_database_copy = get_script().new()
+	_database_copy._is_loader_copy = true
+	if _loading_thread.start(Callable(_database_copy, "reload_all")) != OK:
+		_database_copy.free()
+		_database_copy = null
+		_ensure_loaded()
+
+
+## 后台任务完成后在主线程发布完整快照；无需让首页等待首次页面访问。
+func _process(_delta: float) -> void:
+	if _loading_thread.is_started() and not _loading_thread.is_alive():
+		_ensure_loaded()
+
+
+## 同步获取完整结果；仅兼容直接读取索引或同步调用的现有规则与测试入口。
+func _ensure_loaded() -> void:
+	if _database_loaded or _is_loader_copy or _loading_in_main:
+		return
+	_loading_in_main = true
+	if _loading_thread.is_started():
+		_loading_thread.wait_to_finish()
+		for property_name: String in ["cards", "_card_definitions_by_display_name", "_resolved_card_text_cache_by_mode", "card_definitions", "card_scripts", "decks", "characters", "character_definitions", "factions", "skills", "skill_scripts", "player_effects", "player_effect_scripts", "validation_errors", "content_revision"]:
+			set(property_name, _database_copy.get(property_name))
+		_database_copy.free()
+		_database_copy = null
+	else:
+		reload_all()
+	_database_loaded = true
+	_loading_in_main = false
+	database_ready.emit()
+
+
+## 应用退出时回收后台线程，避免线程仍访问项目资源。
+func _exit_tree() -> void:
+	if _loading_thread.is_started():
+		_loading_thread.wait_to_finish()
+		if _database_copy != null:
+			_database_copy.free()
+			_database_copy = null
 
 
 ## 重新扫描源码目录并校验全部配置；目录新增或删除文件后调用即可刷新索引。
 func reload_all() -> bool:
+	_ensure_loaded()
 	validation_errors.clear()
 	cards.clear()
 	_card_definitions_by_display_name.clear()
@@ -106,21 +225,27 @@ func reload_all() -> bool:
 	_validate_decks()
 	_validate_factions()
 	_validate_characters()
+	content_revision += 1
 	return validation_errors.is_empty()
 
 
 ## 返回指定卡牌定义的深拷贝，防止调用方误改全局配置。
 func get_card(card_id: String) -> Dictionary:
+	if card_id.is_empty():
+		return {}
+	_ensure_loaded()
 	return (cards.get(card_id, {}) as Dictionary).duplicate(true)
 
 
 ## 返回指定卡牌的源码定义对象；对象只保存静态数据，具体效果函数不得持有对局状态。
 func get_card_definition(card_id: String) -> CardDefinition:
+	_ensure_loaded()
 	return card_definitions.get(card_id) as CardDefinition
 
 
 ## 为装备或其他持续区域效果创建独立卡牌实例；实例尚未绑定玩家、实体 UID 或事件总线。
 func create_card_runtime(card_id: String) -> CardDefinition:
+	_ensure_loaded()
 	# 卡牌脚本资源；不存在时返回 null，调用方不得复用数据库中的静态定义对象保存对局状态。
 	var card_script: Script = card_scripts.get(card_id) as Script
 	if card_script == null:
@@ -130,11 +255,15 @@ func create_card_runtime(card_id: String) -> CardDefinition:
 
 ## 返回指定武将定义的深拷贝，空结果表示 ID 未登记。
 func get_character(character_id: String) -> Dictionary:
+	if character_id.is_empty():
+		return {}
+	_ensure_loaded()
 	return (characters.get(character_id, {}) as Dictionary).duplicate(true)
 
 
 ## 返回允许进入普通选将、随机抽取与模式换将池的武将ID；特殊武将仅在显式包含时进入结果。
 func get_selectable_character_ids(include_special: bool = false) -> Array[String]:
+	_ensure_loaded()
 	# 可选武将结果；保留数据库扫描后的稳定键顺序，具体选将服务仍负责洗牌与候选排序。
 	var result: Array[String] = []
 	for character_id_variant: Variant in characters.keys():
@@ -149,6 +278,9 @@ func get_selectable_character_ids(include_special: bool = false) -> Array[String
 
 ## 返回武将的本地化显示名称；界面只能使用该入口显示名称，避免稳定英文 ID 泄漏到玩家可见区域。
 func resolve_character_name(character_id: String) -> String:
+	if character_id.is_empty():
+		return "未选武将"
+	_ensure_loaded()
 	# 当前武将定义；从静态索引读取以取得配置的中文 display_name。
 	# 本函数只返回不可变字符串，可直接读取内部索引而无须深复制整份静态元数据。
 	var character_definition: Dictionary = characters.get(character_id, {}) as Dictionary
@@ -161,11 +293,13 @@ func resolve_character_name(character_id: String) -> String:
 
 ## 返回指定势力的展示元数据深拷贝；空结果表示势力 ID 未登记，调用方应使用中性视觉回退。
 func get_faction(faction_id: String) -> Dictionary:
+	_ensure_loaded()
 	return (factions.get(faction_id, {}) as Dictionary).duplicate(true)
 
 
 ## 返回指定技能元数据的深拷贝，空结果表示技能 ID 未登记。
 func get_skill(skill_id: String) -> Dictionary:
+	_ensure_loaded()
 	return (skills.get(skill_id, {}) as Dictionary).duplicate(true)
 
 
@@ -174,6 +308,7 @@ func get_skill(skill_id: String) -> Dictionary:
 ## 括号引用同时允许使用原版牌名或崩铁杀牌名；展示时统一解析到当前模式。
 ## 解析采用完整括号精确匹配，技能名、未登记术语和括号外正文保持不变。
 func resolve_card_names_in_text(source_text: String) -> String:
+	_ensure_loaded()
 	# 当前卡牌名称模式；原版与项目名分别保存缓存，切换设置时不会复用另一模式的旧文本。
 	var name_mode_key: int = int(GameSettings.card_name_mode)
 	# 当前模式文本缓存；字典只保存不可变字符串，不持有界面节点或运行时规则对象。
@@ -242,6 +377,7 @@ func _find_card_by_display_name(display_name: String) -> Dictionary:
 ## 【范围】本函数只回答“与静态定义重名”，不涉及本局已经造出的牌；后者由控制器的造牌端口另行比对
 ## （那些牌不写进任何 GameDatabase 容器，因此这里查不到，这是刻意的：造牌不得污染图鉴与静态卡表）。
 func is_card_display_name_taken(display_name: String) -> bool:
+	_ensure_loaded()
 	# 去首尾空白后判定；调用方传入带空格的文本不应因为空白差异而绕过重名检查。
 	var normalized_name: String = display_name.strip_edges()
 	if normalized_name.is_empty():
@@ -256,6 +392,7 @@ func is_card_display_name_taken(display_name: String) -> bool:
 ## 因此这里一次性给出只读快照，界面只做本地集合比对，最终唯一性仍由控制器在提交时权威复核。
 ## 【口径】与 `is_card_display_name_taken` 完全同源（同一张索引表），不存在两套判定标准。
 func get_all_card_display_names() -> Array[String]:
+	_ensure_loaded()
 	# 结果牌名；排序后返回，保证同一份静态内容在任何机器上得到相同顺序。
 	var result: Array[String] = []
 	for display_name_variant: Variant in _card_definitions_by_display_name.keys():
@@ -278,6 +415,7 @@ func _index_card_display_names(card_definition: Dictionary) -> void:
 
 ## 为一名技能持有者创建独立技能实例；实例尚未绑定玩家，也不会自动订阅规则事件。
 func create_skill(skill_id: String) -> SkillDefinition:
+	_ensure_loaded()
 	# 技能脚本资源；不存在时返回 null，让调用方以统一配置错误处理。
 	var skill_script: Script = skill_scripts.get(skill_id) as Script
 	if skill_script == null:
@@ -288,6 +426,7 @@ func create_skill(skill_id: String) -> SkillDefinition:
 ## 为一个承载角色创建独立效果实例；实例尚未绑定角色，也不会自动订阅规则事件。
 ## 与 create_skill 同构：这里只负责按 ID 造对象，生命周期与订阅完全由控制器托管。
 func create_player_effect(effect_id: String) -> PlayerEffect:
+	_ensure_loaded()
 	# 效果脚本资源；不存在时返回 null，让调用方按统一配置错误处理。
 	var effect_script: Script = player_effect_scripts.get(effect_id) as Script
 	if effect_script == null:
@@ -297,11 +436,13 @@ func create_player_effect(effect_id: String) -> PlayerEffect:
 
 ## 返回指定效果的元数据深拷贝，空结果表示效果 ID 未登记。
 func get_player_effect(effect_id: String) -> Dictionary:
+	_ensure_loaded()
 	return (player_effects.get(effect_id, {}) as Dictionary).duplicate(true)
 
 
 ## 返回全部已登记效果 ID；顺序继承目录扫描结果，保证读档重建按稳定顺序执行。
 func get_player_effect_ids() -> Array[String]:
+	_ensure_loaded()
 	# 稳定结果；按目录排序后的注册顺序返回，便于测试与诊断复现同一顺序。
 	var result: Array[String] = []
 	for effect_id_variant: Variant in player_effects.keys():
@@ -311,6 +452,7 @@ func get_player_effect_ids() -> Array[String]:
 
 ## 返回指定牌堆中的紧凑实体牌条目；每项格式为 [花色, 点数, 卡牌ID]。
 func get_deck_cards(deck_id: String) -> Array:
+	_ensure_loaded()
 	# 指定牌堆定义；不存在时使用空字典保证查询安全。
 	var deck_definition: Dictionary = decks.get(deck_id, {}) as Dictionary
 	return (deck_definition.get("cards", []) as Array).duplicate(true)
@@ -468,6 +610,7 @@ func _load_characters() -> void:
 ## 卡牌目录或依赖加载顺序；由数据库统一给出排序后的只读结果，界面、AI 与回放才能得到同一份顺序。
 ## 【参数】card_type 取卡牌定义中的 `type` 字段（basic / trick / equipment 等）；未知类别返回空数组。
 func get_card_ids_by_type(card_type: String) -> Array[String]:
+	_ensure_loaded()
 	# 结果定义ID；按字典序排序，与文件系统枚举顺序无关。
 	var result: Array[String] = []
 	if card_type.is_empty():
