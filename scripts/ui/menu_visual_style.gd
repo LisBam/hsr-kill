@@ -2,6 +2,7 @@ extends RefCounted
 
 ## 局外界面的视觉工厂。保留 BattleUIStyle 的主题来源与内容边距，独立控制柔和边界、圆角和主次操作层级。
 ## 仅首页及其子页面引用本类，正式牌面、战斗菜单和规则界面继续使用 BattleUIStyle。
+## 通用表面补充：战斗外壳经battle_surface_style适配器复用本工厂的按钮与边距；正式牌面仍使用原语义工厂。
 
 ## 缺省颜色标记；负通道表示使用活动主题，显式透明色不会被替换。
 const UNSET_COLOR: Color = Color(-1.0, -1.0, -1.0, -1.0)

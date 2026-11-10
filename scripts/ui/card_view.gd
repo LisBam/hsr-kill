@@ -1,6 +1,9 @@
 class_name CardView
 extends Node2D
 
+## 外围选择组件；复用武将牌同款反馈，不参与手牌布局和拖拽。
+const SELECTION_FEEDBACK: Script = preload("res://scripts/ui/selection_feedback.gd")
+
 ## 可复用的实体卡牌视图。根节点只代表一张卡牌，输入由独立透明组件处理，因此同一节点可在手牌、拖拽和弃牌动画之间移动。
 
 ## 卡牌被点击时发出的信号；桌面据此更新临时选择，不直接提交对局动作。
@@ -35,7 +38,9 @@ signal information_dismissed
 @export_range(0.0, 36.0, 1.0) var selected_lift: float = 14.0
 
 ## 手牌选中与取消选中时的纵向位移动画时长；默认0.025秒提供即时但可感知的抬起反馈，运行时通常无需动态修改。
-@export_range(0.0, 0.2, 0.005) var selection_animation_seconds: float = 0.025
+@export_range(0.0, 0.2, 0.005) var selection_animation_seconds: float = 0.14
+
+## 当前表现补充：选中位移使用0.14秒三次缓出，手牌入场、排序和选中仍通过独立差值偏移叠加。
 
 ## 鼠标悬停时的缩放倍率；默认1.06提供轻量实体牌靠近反馈，运行时可动态调整。
 @export_range(1.0, 1.2, 0.01) var hover_scale: float = 1.06
@@ -151,6 +156,9 @@ var _hover_tween: Tween
 
 ## 当前选中位移动画；重复点击时会从当前偏移平滑转向新目标，避免并行动画争抢节点位置。
 var _selection_tween: Tween
+
+## 牌面外围选择反馈；在首次视觉刷新创建，跟随实体牌复用而不保存规则对象。
+var _selection_feedback: Control
 
 ## 当前实体手牌是否正被直接拖动；为true时手牌容器保留原节点的鼠标跟随位置，不回写常规布局坐标。
 var _is_hand_dragging: bool = false
@@ -409,6 +417,8 @@ func is_hand_dragging() -> bool:
 func begin_hand_drag(pointer_global_position: Vector2) -> void:
 	if _get_hand_reorder_zone().is_empty():
 		return
+	if _selection_tween != null and _selection_tween.is_valid():
+		_selection_tween.kill()
 	_is_hand_dragging = true
 	_hand_drag_pointer_offset = pointer_global_position - global_position
 	z_index = HOVER_Z_INDEX + 1
@@ -430,17 +440,21 @@ func end_hand_drag() -> void:
 	var hand_layout: DecadeHandContainer = get_parent() as DecadeHandContainer
 	if hand_layout != null:
 		hand_layout.refresh_card_states()
+		_start_selection_tween(Vector2(0.0, -hand_layout.selected_lift if is_card_selected else 0.0))
 
 
 ## 启动手牌选中或取消选中的位移动画；非手牌展示区域继续沿用原有即时位置逻辑。
 func _start_selection_tween(target_offset: Vector2) -> void:
+	# 拖牌期间仅鼠标跟随拥有位置；释放后再恢复选中抬升，避免两条轨道争抢原实体牌。
+	if _is_hand_dragging:
+		return
 	if _selection_tween != null and _selection_tween.is_valid():
 		_selection_tween.kill()
 	if selection_animation_seconds <= 0.0:
 		hand_selection_offset = target_offset
 		return
 	_selection_tween = create_tween()
-	_selection_tween.set_trans(Tween.TRANS_QUAD)
+	_selection_tween.set_trans(Tween.TRANS_CUBIC)
 	_selection_tween.set_ease(Tween.EASE_OUT)
 	_selection_tween.tween_property(self, "hand_selection_offset", target_offset, selection_animation_seconds)
 
@@ -477,6 +491,12 @@ func _refresh_visual_state() -> void:
 	_refresh_view_as_banner_style()
 	_refresh_card_back_style()
 	_card_back.visible = is_face_down
+	if _selection_feedback == null:
+		_selection_feedback = SELECTION_FEEDBACK.new()
+		_selection_feedback.name = "SelectionFeedback"
+		_selection_feedback.z_index = 10
+		add_child(_selection_feedback)
+	_selection_feedback.configure(Vector2(card_width, card_height), is_card_selected, BattleUIStyle.get_color("accent"), _is_hovered and is_interactable)
 
 
 ## 把缓存的牌面文本与插画写入子节点；可在 configure 早于 _ready 时安全重复调用。

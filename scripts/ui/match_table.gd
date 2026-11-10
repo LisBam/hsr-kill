@@ -1,5 +1,8 @@
 extends Control
 
+## 局内外壳样式；只组织面板与按钮层次，不改变规则语义色和内容尺寸。
+const BATTLE_STYLE: Script = preload("res://scripts/ui/battle_surface_style.gd")
+
 ## 标准身份局演示桌面。界面只提交 PlayerAction 并渲染快照，不直接修改任何对局状态。
 
 ## 游戏内座位容器场景；运行时把独立座次标签放在武将牌下方，不把标签混入武将牌编辑场景。
@@ -813,15 +816,15 @@ func _configure_interaction_controls() -> void:
 	interaction_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	interaction_panel.add_theme_stylebox_override("panel", StyleBoxEmpty.new())
 	use_button.custom_minimum_size = ACTION_BUTTON_MINIMUM_SIZE
-	BattleUIStyle.apply_interaction_button(use_button)
+	BATTLE_STYLE.apply_interaction_button(use_button)
 	# 终局结算按钮；常态隐藏，仅在整局结束后插入重新开始与返回主菜单之间。
 	settlement_button.visible = false
 	settlement_button.custom_minimum_size = ACTION_BUTTON_MINIMUM_SIZE
-	BattleUIStyle.apply_interaction_button(settlement_button)
+	BATTLE_STYLE.apply_interaction_button(settlement_button)
 	# 中央取消按钮；与确定按钮使用相同尺寸与主按钮样式，避免旧场景资源保留次级按钮外观。
 	var cancel_button: Button = %CancelButton
 	cancel_button.custom_minimum_size = ACTION_BUTTON_MINIMUM_SIZE
-	BattleUIStyle.apply_interaction_button(cancel_button)
+	BATTLE_STYLE.apply_interaction_button(cancel_button)
 	# 【振旗】第三个取消按钮；常态隐藏，费用询问时与原两个位置并列，不创建遮罩窗口。
 	_zhenqi_cancel_button = Button.new()
 	_zhenqi_cancel_button.name = "ZhenqiCancelButton"
@@ -829,7 +832,7 @@ func _configure_interaction_controls() -> void:
 	_zhenqi_cancel_button.custom_minimum_size = ZHENQI_ACTION_BUTTON_MINIMUM_SIZE
 	_zhenqi_cancel_button.text = "取消"
 	_zhenqi_cancel_button.pressed.connect(_on_zhenqi_cancel_pressed)
-	BattleUIStyle.apply_interaction_button(_zhenqi_cancel_button)
+	BATTLE_STYLE.apply_interaction_button(_zhenqi_cancel_button)
 	var action_row: HBoxContainer = $InteractionPanel/InteractionVBox/ActionRow
 	action_row.add_child(_zhenqi_cancel_button)
 	action_row.add_theme_constant_override("separation", ACTION_BUTTON_SEPARATION)
@@ -838,7 +841,7 @@ func _configure_interaction_controls() -> void:
 		end_play_button.reparent(self)
 	end_play_button.visible = false
 	end_play_button.custom_minimum_size = END_PLAY_BUTTON_MINIMUM_SIZE
-	BattleUIStyle.apply_interaction_button(end_play_button, BattleUIStyle.get_color("end_play_button", END_PLAY_BUTTON_COLOR), BattleUIStyle.get_color("end_play_border", END_PLAY_BUTTON_BORDER_COLOR), true)
+	BATTLE_STYLE.apply_interaction_button(end_play_button, BattleUIStyle.get_color("end_play_button", END_PLAY_BUTTON_COLOR), BattleUIStyle.get_color("end_play_border", END_PLAY_BUTTON_BORDER_COLOR), true)
 	end_play_button.anchor_left = 1.0
 	end_play_button.anchor_top = 1.0
 	end_play_button.anchor_right = 1.0
@@ -3857,7 +3860,7 @@ func _apply_ui_style() -> void:
 	($Background as ColorRect).color = BattleUIStyle.get_color("outer_background")
 	($BackdropShade as ColorRect).color = BattleUIStyle.get_color("backdrop_shade", Color.TRANSPARENT)
 	($TableOrnament as TextureRect).modulate = BattleUIStyle.get_color("ornament_overlay", Color(BattleUIStyle.get_color("ornament"), 0.12))
-	($TopInfoPanel as PanelContainer).add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel())
+	($TopInfoPanel as PanelContainer).add_theme_stylebox_override("panel", BATTLE_STYLE.make_inset_panel())
 	# 顶栏轮次与关卡统一指定回退字体；动态显示“第N关”时不会因场景默认主题差异出现字形不一致。
 	_apply_top_info_primary_label_style()
 	center_turn_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
@@ -3866,17 +3869,17 @@ func _apply_ui_style() -> void:
 	main_menu.refresh_ui_style()
 	if developer_console_panel != null and is_instance_valid(developer_console_panel):
 		developer_console_panel.refresh_ui_style()
-	BattleUIStyle.apply_interaction_button(%LogToggleButton, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
-	BattleUIStyle.apply_interaction_button(auto_manage_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("accent"), false)
-	(%LogContentPanel as PanelContainer).add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel())
+	BATTLE_STYLE.apply_interaction_button(%LogToggleButton, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
+	BATTLE_STYLE.apply_interaction_button(auto_manage_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("accent"), false)
+	(%LogContentPanel as PanelContainer).add_theme_stylebox_override("panel", BATTLE_STYLE.make_inset_panel())
 	($LogPanel/LogContentPanel/LogVBox/LogTitle as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	log_view.add_theme_color_override("default_color", BattleUIStyle.get_color("text_secondary"))
 	interaction_guide_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_guide"))
 	selection_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	error_label.add_theme_color_override("font_color", BattleUIStyle.get_color("danger"))
-	BattleUIStyle.apply_interaction_button(use_button)
-	BattleUIStyle.apply_interaction_button(settlement_button)
-	BattleUIStyle.apply_interaction_button(%CancelButton)
+	BATTLE_STYLE.apply_interaction_button(use_button)
+	BATTLE_STYLE.apply_interaction_button(settlement_button)
+	BATTLE_STYLE.apply_interaction_button(%CancelButton, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
 	if game_settlement_panel != null and is_instance_valid(game_settlement_panel):
 		game_settlement_panel.refresh_ui_style()
 	if opportunity_choice_panel != null and is_instance_valid(opportunity_choice_panel):
@@ -6304,7 +6307,7 @@ func _append_inline_control_option_button(option_id: String, option_label: Strin
 	option_button.custom_minimum_size = ACTION_BUTTON_MINIMUM_SIZE
 	option_button.text = option_label if not option_label.is_empty() else option_id
 	option_button.pressed.connect(_on_inline_control_extra_option_pressed.bind(option_id))
-	BattleUIStyle.apply_interaction_button(option_button)
+	BATTLE_STYLE.apply_interaction_button(option_button)
 	$InteractionPanel/InteractionVBox/ActionRow.add_child(option_button)
 	_inline_control_extra_option_buttons.append(option_button)
 
@@ -6317,7 +6320,7 @@ func _append_inline_control_cancel_button() -> void:
 	cancel_button.custom_minimum_size = ACTION_BUTTON_MINIMUM_SIZE
 	cancel_button.text = "取消"
 	cancel_button.pressed.connect(_on_inline_control_cancel_pressed)
-	BattleUIStyle.apply_interaction_button(cancel_button)
+	BATTLE_STYLE.apply_interaction_button(cancel_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
 	$InteractionPanel/InteractionVBox/ActionRow.add_child(cancel_button)
 	_inline_control_extra_option_buttons.append(cancel_button)
 
@@ -6441,15 +6444,15 @@ func _refresh_group_trick_response_button() -> void:
 		return
 	if not _has_group_trick_response_button_context():
 		end_play_button.text = "结束阶段"
-		BattleUIStyle.apply_interaction_button(end_play_button, BattleUIStyle.get_color("end_play_button", END_PLAY_BUTTON_COLOR), BattleUIStyle.get_color("end_play_border", END_PLAY_BUTTON_BORDER_COLOR), true)
+		BATTLE_STYLE.apply_interaction_button(end_play_button, BattleUIStyle.get_color("end_play_button", END_PLAY_BUTTON_COLOR), BattleUIStyle.get_color("end_play_border", END_PLAY_BUTTON_BORDER_COLOR), true)
 		return
 	end_play_button.visible = true
 	end_play_button.disabled = false
 	end_play_button.text = "不响应该锦囊"
 	if _suppressed_group_trick_uid >= 0:
-		BattleUIStyle.apply_interaction_button(end_play_button, BattleUIStyle.get_color("suppressed_button", SUPPRESSED_TRICK_BUTTON_COLOR), BattleUIStyle.get_color("suppressed_border", SUPPRESSED_TRICK_BUTTON_BORDER_COLOR), false)
+		BATTLE_STYLE.apply_interaction_button(end_play_button, BattleUIStyle.get_color("suppressed_button", SUPPRESSED_TRICK_BUTTON_COLOR), BattleUIStyle.get_color("suppressed_border", SUPPRESSED_TRICK_BUTTON_BORDER_COLOR), false)
 	else:
-		BattleUIStyle.apply_interaction_button(end_play_button, BattleUIStyle.get_color("end_play_button", END_PLAY_BUTTON_COLOR), BattleUIStyle.get_color("end_play_border", END_PLAY_BUTTON_BORDER_COLOR), true)
+		BATTLE_STYLE.apply_interaction_button(end_play_button, BattleUIStyle.get_color("end_play_button", END_PLAY_BUTTON_COLOR), BattleUIStyle.get_color("end_play_border", END_PLAY_BUTTON_BORDER_COLOR), true)
 
 
 ## 判断当前选中实体牌是否位于普通手牌区；木牛流马“粮”不属于可重铸来源。

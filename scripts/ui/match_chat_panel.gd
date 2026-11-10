@@ -1,6 +1,12 @@
 class_name MatchChatPanel
 extends Control
 
+## 可取消的面板入场；只订阅显隐，不延迟关闭、提交或权威状态更新。
+const SURFACE_MOTION: Script = preload("res://scripts/ui/ui_surface_motion.gd")
+
+## 局内外壳样式；只组织面板与按钮层次，不改变规则语义色和内容尺寸。
+const BATTLE_STYLE: Script = preload("res://scripts/ui/battle_surface_style.gd")
+
 ## 局内聊天窗口组件。窗口由“菜单”按钮下方的“聊天”按钮切换显隐，提供历史消息浏览与消息发送输入。
 ## 组件全部节点在代码中构建（与 InformationBoxLayer 的运行时创建方式一致），只发出纯文本聊天意图；
 ## 消息的权威登记、署名与广播由 NetworkGateway 负责，头顶气泡由牌桌负责，本组件不访问规则状态或网络。
@@ -60,6 +66,7 @@ func _ready() -> void:
 	offset_bottom = panel_top_margin + panel_height
 	_build_interface()
 	refresh_ui_style()
+	SURFACE_MOTION.attach(_frame, "page")
 
 
 ## 创建窗口内部控件；仅在 _ready 调用一次，后续主题切换只重绘样式不重建节点。
@@ -163,11 +170,11 @@ func clear_history() -> void:
 func refresh_ui_style() -> void:
 	if _frame == null:
 		return
-	_frame.add_theme_stylebox_override("panel", BattleUIStyle.make_panel(BattleUIStyle.get_color("metal_panel"), BattleUIStyle.get_color("border"), 2, 8))
+	_frame.add_theme_stylebox_override("panel", BATTLE_STYLE.make_panel(BattleUIStyle.get_color("metal_panel"), BattleUIStyle.get_color("border"), 2, 8))
 	_title_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	_history_view.add_theme_color_override("default_color", BattleUIStyle.get_color("text_secondary"))
-	BattleUIStyle.apply_interaction_button(_close_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
-	BattleUIStyle.apply_interaction_button(_send_button)
+	BATTLE_STYLE.apply_interaction_button(_close_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
+	BATTLE_STYLE.apply_interaction_button(_send_button)
 	_input_field.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	_input_field.add_theme_color_override("caret_color", BattleUIStyle.get_color("accent"))
 

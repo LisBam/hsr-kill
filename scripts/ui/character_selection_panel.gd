@@ -1,6 +1,12 @@
 class_name CharacterSelectionPanel
 extends Control
 
+## 可取消的面板入场；只订阅显隐，不延迟关闭、提交或权威状态更新。
+const SURFACE_MOTION: Script = preload("res://scripts/ui/ui_surface_motion.gd")
+
+## 局内外壳样式；只组织面板与按钮层次，不改变规则语义色和内容尺寸。
+const BATTLE_STYLE: Script = preload("res://scripts/ui/battle_surface_style.gd")
+
 ## 选将界面组件。该组件只渲染观察者可见候选、临时高亮和确认进度，通过稳定武将 ID 发出选择请求。
 
 ## 玩家确认武将时发出的信号；参数为稳定武将配置 ID，不携带节点或配置引用。
@@ -246,9 +252,9 @@ func _ready() -> void:
 	if not _required_nodes_ready:
 		visible = false
 		return
-	BattleUIStyle.apply_interaction_button(_confirm_button)
+	BATTLE_STYLE.apply_interaction_button(_confirm_button)
 	_confirm_button.pressed.connect(_confirm_selection)
-	BattleUIStyle.apply_interaction_button(_all_characters_button)
+	BATTLE_STYLE.apply_interaction_button(_all_characters_button)
 	_all_characters_button.pressed.connect(_toggle_all_characters)
 	# 候选区只允许垂直滚动；横向始终由自适应列数完整容纳，避免左右滑动寻找牌面。
 	var candidate_scroll: ScrollContainer = _candidate_area as ScrollContainer
@@ -282,6 +288,7 @@ func _ready() -> void:
 	_capture_default_layout()
 	refresh_ui_style()
 	visible = false
+	SURFACE_MOTION.attach(_selection_frame, "modal")
 
 
 ## 按当前活动 UI 风格重绘选将框与候选武将牌；候选集合、临时选择和悬停补间保持不变。
@@ -295,14 +302,14 @@ func refresh_ui_style() -> void:
 	# 选将主框；统一使用主题选择面板与边框语义。
 	var selection_frame: Panel = get_node_or_null("SelectionFrame") as Panel
 	if selection_frame != null:
-		selection_frame.add_theme_stylebox_override("panel", BattleUIStyle.make_inset_panel(BattleUIStyle.get_color("selection_panel"), BattleUIStyle.get_color("border"), 2, 6))
+		selection_frame.add_theme_stylebox_override("panel", BATTLE_STYLE.make_inset_panel(BattleUIStyle.get_color("selection_panel"), BattleUIStyle.get_color("border"), 2, 6))
 	_title_label.add_theme_color_override("default_color", BattleUIStyle.get_color("text_primary"))
 	_title_label.add_theme_font_size_override("normal_font_size", 24)
 	_status_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	_leader_character_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	_leader_divider.color = Color(BattleUIStyle.get_color("border"), 0.72)
-	BattleUIStyle.apply_interaction_button(_confirm_button)
-	BattleUIStyle.apply_interaction_button(_all_characters_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("accent"), _showing_all_characters)
+	BATTLE_STYLE.apply_interaction_button(_confirm_button)
+	BATTLE_STYLE.apply_interaction_button(_all_characters_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("accent"), _showing_all_characters)
 	_seat_selection_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	_identity_selection_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	for seat_button_variant: Variant in _seat_button_views.values():
@@ -320,7 +327,7 @@ func refresh_ui_style() -> void:
 		# 当前换将按钮；主题切换只重绘颜色，不改变剩余张数、悬停显隐或候选内容。
 		var replacement_button: Button = replacement_button_variant as Button
 		if replacement_button != null:
-			BattleUIStyle.apply_interaction_button(replacement_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("accent"), true)
+			BATTLE_STYLE.apply_interaction_button(replacement_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("accent"), true)
 	if _leader_character_view != null and is_instance_valid(_leader_character_view):
 		_leader_character_view.refresh_ui_style()
 	for candidate_view_variant: Variant in _candidate_views.values():
@@ -629,7 +636,7 @@ func _render_candidates() -> void:
 			replacement_button.visible = false
 			replacement_button.z_index = 20
 			replacement_button.mouse_filter = Control.MOUSE_FILTER_STOP
-			BattleUIStyle.apply_interaction_button(replacement_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("accent"), true)
+			BATTLE_STYLE.apply_interaction_button(replacement_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("accent"), true)
 			replacement_button.pressed.connect(_request_candidate_replacement.bind(character_id))
 			replacement_button.mouse_entered.connect(_show_replacement_button.bind(character_id))
 			replacement_button.mouse_exited.connect(_queue_replacement_button_visibility_refresh.bind(character_id))
@@ -1311,7 +1318,7 @@ func _update_custom_button_states() -> void:
 func _apply_assignment_button_style(button: Button, border_color: Color, selected: bool) -> void:
 	# 选中背景色；从主题操作底色向语义边框色混合，保持文字可读且在两套主题中都有明显变化。
 	var background_color: Color = BattleUIStyle.get_color("action_button").lerp(border_color, 0.34) if selected else BattleUIStyle.get_color("action_button")
-	BattleUIStyle.apply_interaction_button(button, background_color, border_color, selected)
+	BATTLE_STYLE.apply_interaction_button(button, background_color, border_color, selected)
 	if selected:
 		button.add_theme_color_override("font_color", border_color)
 		button.add_theme_color_override("font_hover_color", border_color.lightened(0.12))

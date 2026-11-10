@@ -1,6 +1,12 @@
 class_name MatchReplayOverlay
 extends Control
 
+## 可取消的面板入场；只订阅显隐，不延迟关闭、提交或权威状态更新。
+const SURFACE_MOTION: Script = preload("res://scripts/ui/ui_surface_motion.gd")
+
+## 局内外壳样式；只组织面板与按钮层次，不改变规则语义色和内容尺寸。
+const BATTLE_STYLE: Script = preload("res://scripts/ui/battle_surface_style.gd")
+
 ## 对局回放重演覆盖层。回放重演期间铺满整个牌桌：透明输入屏障吞掉全部指向底层桌面的
 ## 鼠标操作（重演不可操作），悬浮控制条提供回放名展示、速度选择与“退出回放”按钮。
 ## 控制条支持按住空白区域自由拖动并钳制在画面内，避免固定位置遮挡玩家想观察的牌桌区域；
@@ -110,6 +116,7 @@ func _ready() -> void:
 	_exit_button.pressed.connect(func() -> void: exit_requested.emit())
 	bar_row.add_child(_exit_button)
 	refresh_ui_style()
+	SURFACE_MOTION.attach(_control_bar, "fade")
 
 
 ## 打开覆盖层并重置为原速播放状态；display_name 为回放的可读名称（文件基础名）。
@@ -154,12 +161,12 @@ func _unhandled_input(event: InputEvent) -> void:
 func refresh_ui_style() -> void:
 	if _control_bar == null:
 		return
-	_control_bar.add_theme_stylebox_override("panel", BattleUIStyle.make_panel(BattleUIStyle.get_color("metal_panel"), BattleUIStyle.get_color("accent"), 2, 8))
+	_control_bar.add_theme_stylebox_override("panel", BATTLE_STYLE.make_panel(BattleUIStyle.get_color("metal_panel"), BattleUIStyle.get_color("accent"), 2, 8))
 	_drag_handle_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	_title_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	# OptionButton 继承 Button；复用交互按钮样式统一常态、悬停与按下外观。
-	BattleUIStyle.apply_interaction_button(_speed_option, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
-	BattleUIStyle.apply_interaction_button(_exit_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
+	BATTLE_STYLE.apply_interaction_button(_speed_option, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
+	BATTLE_STYLE.apply_interaction_button(_exit_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
 
 
 ## 速度选择回调；把选项元数据中的倍率转交牌桌，元数据缺失时回退原速。

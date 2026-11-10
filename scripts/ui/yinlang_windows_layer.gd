@@ -1,6 +1,12 @@
 class_name YinlangWindowsLayer
 extends Control
 
+## 可取消的面板入场；只订阅显隐，不延迟关闭、提交或权威状态更新。
+const SURFACE_MOTION: Script = preload("res://scripts/ui/ui_surface_motion.gd")
+
+## 局内外壳样式；只组织面板与按钮层次，不改变规则语义色和内容尺寸。
+const BATTLE_STYLE: Script = preload("res://scripts/ui/battle_surface_style.gd")
+
 ## 银狼专属窗口层：承载【注入】的组合窗口与【以太】的造牌窗口，二者共用同一套高科技黑蓝外观。
 ##
 ## 【为什么单独做一层】这两种窗口的合法答案无法预先枚举（23 × 24 种组合、自由文本牌名），
@@ -59,6 +65,7 @@ func _ready() -> void:
 	visible = false
 	_build_nodes()
 	refresh_ui_style()
+	SURFACE_MOTION.attach(_frame, "modal")
 
 
 ## 建立遮罩、外框与内容骨架；节点结构在代码中一次性建立，避免为纯代码层维护场景文件。
@@ -108,7 +115,7 @@ func refresh_ui_style() -> void:
 		return
 	_shade.color = BattleUIStyle.get_color("shade")
 	# 外框样式；黑蓝底 + 亮青描边，形成「高科技面板」的第一层观感。
-	var frame_style: StyleBoxFlat = BattleUIStyle.make_panel(BattleUIStyle.get_color("tech_panel"), BattleUIStyle.get_color("tech_accent"), 2, 10)
+	var frame_style: StyleBoxFlat = BATTLE_STYLE.make_panel(BattleUIStyle.get_color("tech_panel"), BattleUIStyle.get_color("tech_accent"), 2, 10)
 	frame_style.shadow_color = Color(0.0, 0.0, 0.0, 0.78)
 	frame_style.shadow_size = 16
 	frame_style.shadow_offset = Vector2(0.0, 6.0)
