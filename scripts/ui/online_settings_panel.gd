@@ -18,6 +18,9 @@ const PLAYER_TARGET_VIEW_SCENE: PackedScene = preload("res://scenes/components/p
 ## 列表未准备完成时覆盖形象区域的共用组件；保留页面其他操作。
 const GALLERY_LOADING_COVER_SCRIPT: Script = preload("res://scripts/ui/gallery_loading_cover.gd")
 
+## 共享图鉴加载调度器；负责后台插画与每帧工作预算，不参与页面业务。
+const GALLERY_VIEW_LOADER_SCRIPT: Script = preload("res://scripts/ui/gallery_view_loader.gd")
+
 ## 每行显示的武将牌数量；默认5张可在右侧详情区内保留舒适间距，运行时一般无需动态修改。
 @export_range(1, 8, 1) var avatar_columns: int = 5
 
@@ -33,6 +36,9 @@ const GALLERY_LOADING_COVER_SCRIPT: Script = preload("res://scripts/ui/gallery_l
 ## 每帧最多创建的可见形象牌数量；默认2张减少卡顿，运行时可按设备性能调整。
 ## 补充：当前默认4张，优先准备当前屏，再填充上下缓冲区。
 @export_range(1, 8, 1) var visible_views_per_frame: int = 4
+
+## 每帧牌面装配时间预算（毫秒）；默认3限制CPU尖峰，单张装配不可抢占；运行时修改在下次布局刷新生效。
+@export_range(0.5, 8.0, 0.5) var view_creation_budget_ms: float = 3.0
 
 ## 视口上下提前准备的屏幕高度倍数；默认2倍，运行时可按设备内存调整。
 @export_range(0.0, 5.0, 0.5) var prefetch_viewport_count: float = 2.0
@@ -110,44 +116,16 @@ var _avatar_cache_signature: int = -1
 ## 形象滚动区等待遮罩；当前屏准备完成后隐藏，名称和页面导航保持可用。
 var _loading_cover: ColorRect
 
+## 当前页面的通用加载组件；只在范围变化或牌面尚未准备完整时处理帧。
+var _view_loader: GALLERY_VIEW_LOADER_SCRIPT
+
+## 固定尺寸形象条目；保留完整候选目录，加载器只筛选视口与邻屏范围。
+var _avatar_entries: Array[Dictionary] = []
+
 
 ## 按滚动位置逐帧创建附近的形象牌，离开视口后释放牌面并保留选择数据。
 ## 补充：已创建形象牌现在缓存至目录或布局失效，滚回时直接复用。
-func _process(_delta: float) -> void:
-	if not is_visible_in_tree():
-		return
-	# 本帧剩余创建额度；优先处理当前可视区域，再准备上下缓冲区。
-	var remaining: int = visible_views_per_frame
-	# 当前滚动视口边界；额外预取多个屏幕以减少快速滚动时等待。
-	var top: float = _avatar_scroll.scroll_vertical
-	var bottom: float = top + _avatar_scroll.size.y
-	var margin: float = _avatar_scroll.size.y * prefetch_viewport_count
-	for pass_index: int in range(2):
-		for slot: Node in _avatar_content.get_children():
-			if not slot is Control:
-				continue
-			# 当前形象槽和已创建的牌面；已访问牌面持续缓存至目录失效。
-			var avatar_slot: Control = slot as Control
-			var character_id: String = str(avatar_slot.get_meta("character_id"))
-			if is_instance_valid(_avatar_views.get(character_id)):
-				continue
-			# 第一轮优先当前屏，第二轮处理上下缓冲范围。
-			var in_viewport: bool = avatar_slot.position.y + avatar_slot.size.y > top and avatar_slot.position.y < bottom
-			var in_buffer: bool = avatar_slot.position.y + avatar_slot.size.y > top - margin and avatar_slot.position.y < bottom + margin
-			if remaining > 0 and ((pass_index == 0 and in_viewport) or (pass_index == 1 and in_buffer)):
-				_create_avatar_view(avatar_slot)
-				remaining -= 1
-	# 当前屏有未完成牌面时保持遮罩；已缓存牌面不会重复创建。
-	var viewport_pending: bool = false
-	for slot: Node in _avatar_content.get_children():
-		if not slot is Control:
-			continue
-		var avatar_slot: Control = slot as Control
-		var character_id: String = str(avatar_slot.get_meta("character_id"))
-		if avatar_slot.position.y + avatar_slot.size.y > top and avatar_slot.position.y < bottom and not is_instance_valid(_avatar_views.get(character_id)):
-			viewport_pending = true
-			break
-	_loading_cover.call("set_loading", viewport_pending, _avatar_scroll)
+## 加载工作由GalleryViewLoader按事件唤醒；页面不再逐帧扫描全部目录。
 
 
 ## 初始化资料面板信号与主题监听；组件默认隐藏，只有主菜单顶部“联机设置”内容页被选中后才接收输入。
@@ -155,6 +133,9 @@ func _ready() -> void:
 	visible = false
 	_loading_cover = GALLERY_LOADING_COVER_SCRIPT.new() as ColorRect
 	add_child(_loading_cover)
+	_view_loader = GALLERY_VIEW_LOADER_SCRIPT.new()
+	add_child(_view_loader)
+	_view_loader.bind(_avatar_scroll, _loading_cover, _create_avatar_entry_view)
 	_backdrop.visible = false
 	_backdrop.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_player_name_input.max_length = GameSettings.MAX_ONLINE_PLAYER_NAME_LENGTH
@@ -175,10 +156,25 @@ func open_panel() -> void:
 	_player_name_input.text = GameSettings.online_player_name
 	_player_name_input.caret_column = _player_name_input.text.length()
 	_rebuild_avatar_options()
+	_refresh_avatar_view_loading()
 	_keep_profile_section_selected()
 	# 操作栏与形象列表纵向分栏；仍抬升 z_index，避免 Node2D 武将牌绘制压过取消/保存按钮。
 	_action_panel.z_index = 20
 	call_deferred("_focus_primary_control")
+
+
+## 将形象候选与检查器预算提交给共享调度器；以下范围策略由组件执行，页面只维护选择与目录。
+func _refresh_avatar_view_loading() -> void:
+	# 以下策略由独立加载组件执行；保留页面原有的范围、缓存与遮罩契约。
+	# 本帧剩余创建额度；优先处理当前可视区域，再准备上下缓冲区。
+	# 当前滚动视口边界；额外预取多个屏幕以减少快速滚动时等待。
+	# 当前形象槽和已创建的牌面；已访问牌面持续缓存至目录失效。
+	# 第一轮优先当前屏，第二轮处理上下缓冲范围。
+	# 当前屏有未完成牌面时保持遮罩；已缓存牌面不会重复创建。
+	_view_loader.visible_views_per_frame = visible_views_per_frame
+	_view_loader.prefetch_viewport_count = prefetch_viewport_count
+	_view_loader.creation_budget_ms = view_creation_budget_ms
+	_view_loader.refresh(_avatar_entries)
 
 
 ## 按当前活动主题刷新左右分栏、摘要、输入框、按钮与动态武将牌；不改变任何临时编辑或已保存资料。
@@ -215,20 +211,20 @@ func refresh_ui_style() -> void:
 ## 从数据库全部现有武将重建形象候选；显示顺序按中文名称稳定排序，新增武将无需修改本组件。
 ## 补充：当前先按需求指定的势力顺序分组，再在同一势力内按中文名称稳定排序。
 func _rebuild_avatar_options() -> void:
-	# 当前已登记武将 ID；复制后按显示名排序，避免直接依赖数据库字典遍历顺序。
-	var character_ids: Array[String] = []
-	for character_id_variant: Variant in GameDatabase.characters.keys():
-		character_ids.append(str(character_id_variant))
-	character_ids.sort_custom(_sort_character_ids_by_name)
 	# 内容版本与布局参数组成缓存签名；数据库重载或检查器调整后重建候选。
+	# 每次打开仍恢复已保存形象，取消未保存编辑不会被缓存保留。
+	# 先检查版本，缓存命中时不重新枚举、深拷贝和排序全部武将。
 	var next_cache_signature: int = hash([GameDatabase.content_revision, avatar_columns, avatar_card_scale, avatar_horizontal_gap, avatar_vertical_gap])
-	if next_cache_signature == _avatar_cache_signature and not character_ids.is_empty():
-		# 每次打开仍恢复已保存形象，取消未保存编辑不会被缓存保留。
+	if next_cache_signature == _avatar_cache_signature and not _avatar_entries.is_empty():
+		# 每次打开恢复已保存的形象；目录字典仅查键，不创建任何规则对象。
 		var saved_id: String = GameSettings.online_avatar_character_id
-		_selected_character_id = saved_id if character_ids.has(saved_id) else character_ids[0]
+		_selected_character_id = saved_id if GameDatabase.characters.has(saved_id) else str(_avatar_entries[0]["id"])
 		_save_button.disabled = false
 		_update_avatar_selection()
 		return
+	# 当前已登记武将 ID；复制后按显示名排序，避免直接依赖数据库字典遍历顺序。
+	# 共用稳定目录顺序；缓存未命中时才执行一次正式排序。
+	var character_ids: Array[String] = CardGallerySort.get_sorted_character_ids()
 	_clear_avatar_options()
 	_avatar_cache_signature = next_cache_signature
 	if character_ids.is_empty():
@@ -263,6 +259,7 @@ func _rebuild_avatar_options() -> void:
 		avatar_slot.set_meta("definition", character_definition)
 		avatar_slot.set_meta("faction", faction_definition)
 		_avatar_content.add_child(avatar_slot)
+		_avatar_entries.append({"id":character_id, "slot":avatar_slot, "definition":character_definition, "view":null})
 	# 实际行数；向上取整保证最后一行不完整时仍为全部候选保留滚动高度。
 	var row_count: int = ceili(float(character_ids.size()) / float(avatar_columns))
 	# 实际显示列数；武将不足一行时按真实数量收紧内容并保持整体居中。
@@ -273,6 +270,12 @@ func _rebuild_avatar_options() -> void:
 		row_count * scaled_card_size.y + maxi(row_count - 1, 0) * avatar_vertical_gap
 	)
 	_update_avatar_selection()
+
+
+## 将页面专有的形象创建逻辑适配为通用条目回调；选择、手势与信号仍由页面持有。
+func _create_avatar_entry_view(entry: Dictionary) -> void:
+	_create_avatar_view(entry["slot"] as Control)
+	entry["view"] = _avatar_views.get(str(entry["id"]))
 
 
 ## 为可见槽创建正式武将牌，选择状态来自面板数据而非节点生命周期。
@@ -299,9 +302,10 @@ func _create_avatar_view(avatar_slot: Control) -> void:
 	}
 	# 当前正式武将牌；组件只渲染静态资料并发出点击，不创建玩家或对局状态。
 	var avatar_view: PlayerTargetView = PLAYER_TARGET_VIEW_SCENE.instantiate() as PlayerTargetView
-	avatar_slot.add_child(avatar_view)
 	avatar_view.scale = Vector2.ONE * avatar_card_scale
 	avatar_view.configure_snapshot(avatar_snapshot, character_definition, false, faction_definition)
+	# 先配置再入树，使_ready直接呈现最终快照，避免先创建默认牌面再全量重绘。
+	avatar_slot.add_child(avatar_view)
 	# 列表拖动手势；武将牌 Node2D 会拦截滚轮外的拖动，开启后才能在形象列表中纵向滚动。
 	avatar_view.set_scroll_gesture_enabled(true)
 	avatar_view.scroll_gesture_moved.connect(_on_avatar_scroll_gesture_moved)
@@ -386,6 +390,8 @@ func _cancel_and_close() -> void:
 
 ## 清理全部动态武将形象牌；重新打开或数据库刷新时不会保留旧信号、牌面或选择描边。
 func _clear_avatar_options() -> void:
+	_view_loader.suspend()
+	_avatar_entries.clear()
 	_avatar_views.clear()
 	for child: Node in _avatar_content.get_children():
 		_avatar_content.remove_child(child)
