@@ -186,6 +186,8 @@ func _ensure_loaded() -> void:
 		reload_all()
 	_database_loaded = true
 	_loading_in_main = false
+	# 初始化完成后停止逐帧轮询；数据库重载为同步操作，不需要常驻处理帧。
+	set_process(false)
 	database_ready.emit()
 
 

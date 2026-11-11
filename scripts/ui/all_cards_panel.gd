@@ -18,6 +18,9 @@ const PLAYER_TARGET_VIEW_SCENE: PackedScene = preload("res://scenes/components/p
 ## 列表未准备完成时覆盖牌面区域的共用组件；不改变菜单导航。
 const GALLERY_LOADING_COVER_SCRIPT: Script = preload("res://scripts/ui/gallery_loading_cover.gd")
 
+## 共享图鉴加载调度器；负责后台插画与每帧工作预算，不参与页面业务。
+const GALLERY_VIEW_LOADER_SCRIPT: Script = preload("res://scripts/ui/gallery_view_loader.gd")
+
 ## 正式游戏牌场景；每种已登记定义只展示一张代表牌面，花色点数优先取牌堆中的首个实体配置。
 const CARD_VIEW_SCENE: PackedScene = preload("res://scenes/components/card_view.tscn")
 
@@ -86,6 +89,9 @@ const EXCLUSIVE_CARD_TAG_NAME: String = "专属"
 ## 每帧最多创建的可见牌面数量；默认2张平衡首屏展示速度和帧时间，运行时可调整。
 ## 补充：当前默认4张，并优先完成当前屏，剩余额度用于预取。
 @export_range(1, 8, 1) var visible_views_per_frame: int = 4
+
+## 每帧牌面装配时间预算（毫秒）；默认3限制CPU尖峰，单张装配不可抢占；运行时修改在下次布局刷新生效。
+@export_range(0.5, 8.0, 0.5) var view_creation_budget_ms: float = 3.0
 
 ## 视口上下提前准备的屏幕高度倍数；默认2倍，运行时可按内存和滚动速度调整。
 @export_range(0.0, 5.0, 0.5) var prefetch_viewport_count: float = 2.0
@@ -245,41 +251,13 @@ var _built_category: String = ""
 ## 牌面区域等待遮罩；当前屏准备完成后隐藏，滚动条与顶部导航不受影响。
 var _loading_cover: ColorRect
 
+## 当前页面的通用加载组件；只在范围变化或牌面尚未准备完整时处理帧。
+var _view_loader: GALLERY_VIEW_LOADER_SCRIPT
+
 
 ## 逐帧创建视口内的牌面；离开视口的节点及时释放，搜索和排序继续使用完整元数据。
 ## 补充：已创建节点现在缓存至分类或数据失效，并预取视口附近内容。
-func _process(_delta: float) -> void:
-	if not is_visible_in_tree() or not _grid_scroll.visible:
-		if _loading_cover != null:
-			_loading_cover.call("set_loading", false, _grid_scroll)
-		return
-	# 本帧剩余创建额度；先处理当前屏，再处理上下缓冲区。
-	var remaining: int = visible_views_per_frame
-	# 当前滚动视口边界；缓冲按视口高度延伸，支持快速连续滚动。
-	var top: float = _grid_scroll.scroll_vertical
-	var bottom: float = top + _grid_scroll.size.y
-	var margin: float = _grid_scroll.size.y * prefetch_viewport_count
-	for pass_index: int in range(2):
-		for entry: Dictionary in _entries:
-			# 当前条目槽和牌面；已加载节点始终保留，筛选只改变槽的可见性。
-			var slot: Control = entry.get("slot") as Control
-			var view: Node = entry.get("view") as Node
-			if not slot.visible or is_instance_valid(view):
-				continue
-			# 第一轮只处理当前屏，第二轮处理邻近缓冲区。
-			var in_viewport: bool = slot.position.y + slot.size.y > top and slot.position.y < bottom
-			var in_buffer: bool = slot.position.y + slot.size.y > top - margin and slot.position.y < bottom + margin
-			if remaining > 0 and ((pass_index == 0 and in_viewport) or (pass_index == 1 and in_buffer)):
-				_create_entry_view(entry)
-				remaining -= 1
-	# 只有当前可视范围完整时才揭开遮罩，缓冲区继续在后台逐帧准备。
-	var viewport_pending: bool = false
-	for entry: Dictionary in _entries:
-		var slot: Control = entry.get("slot") as Control
-		if slot.visible and slot.position.y + slot.size.y > top and slot.position.y < bottom and not is_instance_valid(entry.get("view")):
-			viewport_pending = true
-			break
-	_loading_cover.call("set_loading", viewport_pending or _layout_refresh_queued, _grid_scroll)
+## 加载工作由GalleryViewLoader按事件唤醒；页面不再逐帧扫描全部目录。
 
 
 ## 初始化分类按钮、搜索、资料模态与全局表现信号；组件默认隐藏且不读取任何对局状态。
@@ -287,6 +265,9 @@ func _ready() -> void:
 	visible = false
 	_loading_cover = GALLERY_LOADING_COVER_SCRIPT.new() as ColorRect
 	add_child(_loading_cover)
+	_view_loader = GALLERY_VIEW_LOADER_SCRIPT.new()
+	add_child(_view_loader)
+	_view_loader.bind(_grid_scroll, _loading_cover, _create_entry_view)
 	_characters_tab_button.pressed.connect(_select_category.bind(CATEGORY_CHARACTERS))
 	_game_cards_tab_button.pressed.connect(_select_category.bind(CATEGORY_GAME_CARDS))
 	_opportunities_tab_button.pressed.connect(_select_category.bind(CATEGORY_OPPORTUNITIES))
@@ -313,7 +294,7 @@ func open_panel() -> void:
 	_search_input.set_text("")
 	_rebuild_current_entries()
 	_refresh_category_state()
-	refresh_ui_style()
+	# 页面样式在_ready和主题变更信号中维护；重开复用StyleBox，避免整棵控件树重复触发主题与布局更新。
 	_queue_filter_and_layout()
 	call_deferred("_focus_primary_control")
 
@@ -438,10 +419,8 @@ func _rebuild_current_entries() -> void:
 ## 补充：当前先按需求指定的势力顺序分组，再在同一势力内应用名称与稳定 ID 排序。
 func _build_character_entries() -> void:
 	# 全部武将稳定 ID；复制后排序，避免依赖数据库字典遍历顺序。
-	var character_ids: Array[String] = []
-	for character_id_variant: Variant in GameDatabase.characters.keys():
-		character_ids.append(str(character_id_variant))
-	character_ids.sort_custom(_sort_character_ids)
+	# 跨形象页与图鉴复用同一版本的排序结果，避免重复比较时深拷贝武将与势力定义。
+	var character_ids: Array[String] = CardGallerySort.get_sorted_character_ids()
 	# 从场景读取统一布局尺寸；只实例化一次，不初始化牌面。
 	var prototype: PlayerTargetView = PLAYER_TARGET_VIEW_SCENE.instantiate() as PlayerTargetView
 	# 当前武将缩放后尺寸；网格槽始终以此固定尺寸参与布局。
@@ -603,6 +582,7 @@ func _queue_filter_and_layout() -> void:
 	if not is_node_ready() or _layout_refresh_queued:
 		return
 	_layout_refresh_queued = true
+	_view_loader.suspend()
 	if visible and _loading_cover != null:
 		_loading_cover.call("set_loading", true, _grid_scroll)
 	call_deferred("_apply_filter_and_layout")
@@ -631,6 +611,7 @@ func _apply_filter_and_layout() -> void:
 	_result_count_label.text = "共 %d 项" % _entries.size() if normalized_query.is_empty() else "显示 %d / %d 项" % [visible_entries.size(), _entries.size()]
 	if visible_entries.is_empty():
 		_grid_content.custom_minimum_size = Vector2(1.0, 1.0)
+		_refresh_view_loading()
 		return
 	# 当前分类统一牌面尺寸；同一子分页所有正式场景使用一致外部规格。
 	var item_size: Vector2 = visible_entries[0].get("size", Vector2.ZERO)
@@ -664,6 +645,21 @@ func _apply_filter_and_layout() -> void:
 		1.0,
 		row_count * item_size.y + maxi(row_count - 1, 0) * vertical_gap
 	)
+	_refresh_view_loading()
+
+
+## 布局完成后更新加载器配置；可见范围复用过滤后的槽，缓存分类不进入本轮队列。
+func _refresh_view_loading() -> void:
+	# 以下策略由独立加载组件执行；保留页面原有的范围、缓存与遮罩契约。
+	# 本帧剩余创建额度；先处理当前屏，再处理上下缓冲区。
+	# 当前滚动视口边界；缓冲按视口高度延伸，支持快速连续滚动。
+	# 当前条目槽和牌面；已加载节点始终保留，筛选只改变槽的可见性。
+	# 第一轮只处理当前屏，第二轮处理邻近缓冲区。
+	# 只有当前可视范围完整时才揭开遮罩，缓冲区继续在后台逐帧准备。
+	_view_loader.visible_views_per_frame = visible_views_per_frame
+	_view_loader.prefetch_viewport_count = prefetch_viewport_count
+	_view_loader.creation_budget_ms = view_creation_budget_ms
+	_view_loader.refresh(_entries)
 
 
 ## 打开指定条目的完整资料模态；标题、副标题与正文始终从当前静态目录重新解析，避免保存第二份内容快照。
@@ -1051,6 +1047,7 @@ func _normalize_search_text(search_text: String) -> String:
 
 ## 清理当前分类的动态槽和正式牌面；重新打开或切换分类不会残留旧输入信号与节点。
 func _clear_entries() -> void:
+	_view_loader.suspend()
 	_cached_entries_by_category.clear()
 	_built_category = ""
 	_entries = []

@@ -40,6 +40,23 @@ const EQUIPMENT_SUBTYPE_ORDER: Dictionary = {
 }
 
 
+## 最近一次武将目录排序所对应的内容版本；默认-1表示未准备，数据库重载后自动失效。
+static var _sorted_character_revision: int = -1
+
+## 两个图鉴共用的武将稳定顺序；只缓存ID，不保存可修改的定义或规则运行时对象。
+static var _sorted_character_ids: Array[String] = []
+
+
+## 返回按正式势力及名称排序的完整目录副本；首次访问排序一次，跨页面复用，调用者可安全修改返回数组。
+static func get_sorted_character_ids() -> Array[String]:
+	if _sorted_character_revision != GameDatabase.content_revision or _sorted_character_ids.size() != GameDatabase.characters.size():
+		_sorted_character_ids.clear()
+		for character_id: String in GameDatabase.characters.keys():
+			_sorted_character_ids.append(character_id)
+		_sorted_character_ids.sort_custom(sort_character_ids)
+		_sorted_character_revision = GameDatabase.content_revision
+	return _sorted_character_ids.duplicate()
+
 ## 比较两个武将稳定 ID；先按指定势力顺序分组，同势力内按中文名称和稳定 ID 排序。
 static func sort_character_ids(left_character_id: String, right_character_id: String) -> bool:
 	# 左侧武将静态定义；只读取势力字段参与排序。

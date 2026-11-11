@@ -1624,7 +1624,8 @@ func _suspend_background_focus(active_modal: Control = null, focus_keep_roots: A
 	# 实际活动模态；未显式传入时继续使用设置面板，保持旧调用入口语义不变。
 	var modal: Control = _settings_panel if active_modal == null else active_modal
 	# 主菜单下的全部控件；设置浮层只需冻结同一组件内的模式和开局入口，局内焦点由主菜单覆盖边界独立管理。
-	var menu_controls: Array[Node] = find_children("*", "Control", true, false)
+	# 活动页面和保留的导航整棵子树无需冻结；遍历时直接剪枝，避免扫描缓存牌面内成千上百的控件。
+	var menu_controls: Array[Node] = _collect_focus_controls(self, [modal] + focus_keep_roots)
 	# 主菜单控件遍历项；逐个保留原始焦点模式，后续追加的模式按钮无需在组件中硬编码节点名。
 	for control_node: Node in menu_controls:
 		# 当前可聚焦控件；活动面板与允许保留的导航祖先及其后代保持原焦点模式。
@@ -1663,7 +1664,8 @@ func _restore_background_focus() -> void:
 ## 暂停当前视口内主菜单之外全部可聚焦控件；全屏底色负责鼠标，焦点边界负责键盘与手柄输入。
 func _suspend_covered_interface_focus() -> void:
 	# 当前视口下的全部控件；牌桌、日志和局内菜单均与主菜单共享焦点域，主菜单可见时必须统一隔离。
-	var viewport_controls: Array[Node] = get_viewport().find_children("*", "Control", true, false)
+	# 主菜单整棵子树不属于局内焦点域，收集时直接跳过，避免缓存图鉴扩大返回首页的扫描成本。
+	var viewport_controls: Array[Node] = _collect_focus_controls(get_viewport(), [self])
 	# 视口控件遍历项；主菜单自身及全部后代保留原焦点模式，其他可聚焦节点保存后设为不可聚焦。
 	for control_node: Node in viewport_controls:
 		# 当前视口控件；动态创建的牌桌控件也会在延迟置顶阶段补充进入缓存，不依赖固定节点路径。
@@ -1672,6 +1674,27 @@ func _suspend_covered_interface_focus() -> void:
 			continue
 		_covered_interface_focus_modes[control] = control.focus_mode
 		control.focus_mode = Control.FOCUS_NONE
+
+
+## 收集指定根节点内的焦点候选；排除根整棵跳过，返回其他Control，保留各控件原始focus_mode契约。
+func _collect_focus_controls(root: Node, excluded_roots: Array) -> Array[Node]:
+	# 待遍历节点栈；采用迭代遍历避免深层界面递归，并在进入排除子树前剪枝。
+	var pending: Array[Node] = []
+	pending.append_array(root.get_children())
+	# 已收集的Control；与旧find_children返回类型一致，不改变调用端冻结与恢复逻辑。
+	var controls: Array[Node] = []
+	while not pending.is_empty():
+		# 当前遍历节点；活动页面及保留根由调用者显式指定。
+		var control_node: Node = pending.pop_back()
+		if excluded_roots.has(control_node):
+			continue
+		# 正式Node2D牌面通过独立输入区域接收指针，本身不属于菜单键盘焦点域；与局外动效服务采用相同子树边界。
+		if control_node is Node2D:
+			continue
+		if control_node is Control:
+			controls.append(control_node)
+		pending.append_array(control_node.get_children())
+	return controls
 
 
 ## 恢复主菜单覆盖前的局内焦点配置；只在成功进入对局或组件退出场景树时调用。
