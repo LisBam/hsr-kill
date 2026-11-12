@@ -135,6 +135,17 @@ func choose_low_value_card_uids(player_id: int, authoritative_snapshot: Dictiona
 	return policy.choose_low_value_card_uids(authoritative_snapshot, candidate_uids, required_count) if policy != null else []
 
 
+## 为界面“自动选择”提供只读低价值牌建议；不把玩家转为 AI 控制，也不提交任何动作。
+## 人类玩家没有登记策略时临时创建一个独立策略，只复用同一套牌值排序口径；
+## 临时策略不共享协调器的身份模型，避免一次界面点击污染正在进行的 AI 决策状态。
+func suggest_low_value_card_uids(player_id: int, authoritative_snapshot: Dictionary, candidate_uids: Array[int], required_count: int) -> Array[int]:
+	# 已登记策略优先；AI 座位或自定义策略仍保持自身牌值口径。
+	var policy: BasicAIPolicy = _policies.get(player_id) as BasicAIPolicy
+	if policy == null:
+		policy = BasicAIPolicy.new(player_id)
+	return policy.choose_low_value_card_uids(authoritative_snapshot, candidate_uids, required_count)
+
+
 ## 清空身份观察数据；开始新对局时可显式调用，快照 match_id 变化也会自动触发清理。
 func reset_identity_observations() -> void:
 	_identity_model.reset()

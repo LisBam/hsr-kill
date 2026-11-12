@@ -3645,6 +3645,33 @@ func get_pending_choice_legal_actions() -> Array[Dictionary]:
 	return _build_card_choice_actions(_pending_card_choice)
 
 
+## 为本地弃牌界面的“自动选择”按钮返回补选实体 UID；只读请求与快照，不提交动作、不修改任何状态。
+## 该查询接受界面当前展示的请求副本，因此局域网客户端即使没有本机 _pending_card_choice 也能复用同一 AI 牌值排序。
+## excluded_uids 是玩家已经点选、必须保留并占用选中位的牌；required_count 是仍需补选的张数。
+func get_discard_auto_selection_uids(choice_request: Dictionary, authoritative_snapshot: Dictionary, excluded_uids: Array[int], required_count: int) -> Array[int]:
+	if ai_coordinator == null or required_count <= 0:
+		return [] as Array[int]
+	# 请求选择者；自动选择只服务本地真人，不替其他玩家或 AI 座位决定弃牌。
+	var chooser_id: int = int(choice_request.get("chooser_id", -1))
+	if chooser_id < 0 or chooser_id != local_human_player_id:
+		return [] as Array[int]
+	# 仅允许纯手牌弃置复用自动选择；区域混合弃置、技能费用或其他选牌没有该按钮语义。
+	var choice_type: String = str(choice_request.get("choice_type", "card"))
+	var context: Dictionary = choice_request.get("context", {}) as Dictionary
+	var choice_kind: String = str(context.get("kind", ""))
+	if choice_type != "discard" and choice_kind not in ["discard_phase", "extra_discard_phase", "adjust_hand_size"]:
+		return [] as Array[int]
+	# 可补选候选 UID；排除已选牌，避免同一实体重复占用选中位。
+	var candidate_uids: Array[int] = []
+	for candidate_variant: Variant in choice_request.get("candidates", []) as Array:
+		# 当前候选快照；无效 UID 或玩家已选牌不进入 AI 排序。
+		var candidate: Dictionary = candidate_variant as Dictionary
+		var candidate_uid: int = int(candidate.get("uid", -1))
+		if candidate_uid >= 0 and not excluded_uids.has(candidate_uid):
+			candidate_uids.append(candidate_uid)
+	return ai_coordinator.suggest_low_value_card_uids(chooser_id, authoritative_snapshot, candidate_uids, required_count)
+
+
 ## 从规则层合法动作中提交首个可确认结果；成功时返回true，没有可确认动作时为false。
 ## 仅供自动化测试与诊断使用：它保证提交内容一定来自规则层枚举，避免测试自行拼装负载而误判窗口类型。
 ## 选择者由内置AI控制时改经内部AI提交通道，因为该座位的操作只能由它的AI提供（回合操控登记同样按此口径锁定）。

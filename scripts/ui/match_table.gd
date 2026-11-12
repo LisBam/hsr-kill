@@ -111,6 +111,12 @@ const SUPPRESSED_TRICK_BUTTON_COLOR: Color = Color("292826")
 ## “不响应该锦囊”开启后的低亮度边框色；与普通朱红回合结束按钮保持明确区分。
 const SUPPRESSED_TRICK_BUTTON_BORDER_COLOR: Color = Color("5b5751")
 
+## 弃牌自动选择按钮的最低手牌门槛；手牌数达到8张才显示，避免小规模弃牌也出现额外按钮。
+const DISCARD_AUTO_SELECT_MIN_HAND_COUNT: int = 8
+
+## 弃牌自动选择按钮的最低弃置数量门槛；本次请求至少要求弃置4张手牌才显示。
+const DISCARD_AUTO_SELECT_MIN_DISCARD_COUNT: int = 4
+
 ## 技能区相对主场景右边缘的固定右边界；与右下本地武将牌保留27.35像素间隔。
 ## 当前布局将安全间隔收紧为12像素，使技能按钮靠近本地武将牌，同时由手牌右边界计算继续保留8像素隔离。
 ## 当前最终间隔进一步收紧为6像素，仍由独立手牌边界保留8像素安全区，技能按钮不会覆盖手牌信息。
@@ -364,6 +370,10 @@ var local_player_markers: PlayerMarkersView
 
 ## 结束出牌按钮；仅本地玩家的出牌阶段可用。
 @onready var end_play_button: Button = %EndPlayButton
+
+## 弃牌自动选择按钮；只在本地弃牌阶段达到“手牌≥8且需弃置≥4”时显示。
+## 该按钮仅把 AI 建议的牌写入临时选中集合，不提交弃牌、不关闭请求，也不替代中央“确定”按钮。
+var discard_auto_select_button: Button
 
 ## 对局日志文本框；只追加规则核心发出的永久语义日志。
 @onready var log_view: RichTextLabel = %LogView
@@ -852,6 +862,27 @@ func _configure_interaction_controls() -> void:
 	end_play_button.offset_bottom = END_PLAY_BUTTON_OFFSETS.end.y
 	end_play_button.grow_horizontal = Control.GROW_DIRECTION_BEGIN
 	end_play_button.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	# 弃牌自动选择按钮；复用右侧“不响应该锦囊”按钮的锚点、偏移与最小尺寸，
+	# 但使用普通确定/取消按钮的交互色。它只在弃牌内联询问达到门槛时出现，
+	# 因而与“结束阶段”或“不响应该锦囊”不会同时占用同一块操作区域。
+	discard_auto_select_button = Button.new()
+	discard_auto_select_button.name = "DiscardAutoSelectButton"
+	discard_auto_select_button.text = "自动选择"
+	discard_auto_select_button.visible = false
+	discard_auto_select_button.custom_minimum_size = END_PLAY_BUTTON_MINIMUM_SIZE
+	BATTLE_STYLE.apply_interaction_button(discard_auto_select_button)
+	discard_auto_select_button.anchor_left = 1.0
+	discard_auto_select_button.anchor_top = 1.0
+	discard_auto_select_button.anchor_right = 1.0
+	discard_auto_select_button.anchor_bottom = 1.0
+	discard_auto_select_button.offset_left = END_PLAY_BUTTON_OFFSETS.position.x
+	discard_auto_select_button.offset_top = END_PLAY_BUTTON_OFFSETS.position.y
+	discard_auto_select_button.offset_right = END_PLAY_BUTTON_OFFSETS.end.x
+	discard_auto_select_button.offset_bottom = END_PLAY_BUTTON_OFFSETS.end.y
+	discard_auto_select_button.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	discard_auto_select_button.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	discard_auto_select_button.pressed.connect(_on_discard_auto_select_pressed)
+	add_child(discard_auto_select_button)
 
 
 ## 创建未知身份的本地标注菜单；菜单项只影响当前客户端武将牌徽记，不提交任何规则动作。
@@ -3828,6 +3859,43 @@ func _on_end_play_pressed() -> void:
 	match_controller.submit_action(PlayerAction.new("end_play", match_controller.local_human_player_id))
 
 
+## 将 AI 建议的低价值手牌写入本次纯手牌弃置的临时选中集合；保留玩家已选牌并占用其位置。
+## 该入口只刷新界面选择状态，不提交 choose_cards、不关闭请求，玩家仍需点击中央“确定”完成弃牌。
+func _on_discard_auto_select_pressed() -> void:
+	if discard_auto_select_button == null or discard_auto_select_button.disabled:
+		return
+	if not _is_inline_hand_discard_choice(_inline_card_choice):
+		return
+	# 本次请求要求选够的弃牌数；按钮只在至少4张时可见，这里继续以权威请求数量为准。
+	var required_count: int = _get_inline_required_discard_count(_inline_card_choice)
+	# 仍需补选的张数；玩家已经点选的牌强制保留，不能由自动选择取消或替换。
+	var remaining_count: int = required_count - _inline_selected_card_uids.size()
+	if remaining_count <= 0:
+		return
+	# 请求允许的最大张数；正常弃牌请求等于required_count，这里防御旧内容给出更小的上限。
+	var max_select: int = int(_inline_card_choice.get("max_card_select", _inline_card_choice.get("max_select", 0)))
+	remaining_count = mini(remaining_count, max_select - _inline_selected_card_uids.size())
+	if remaining_count <= 0:
+		return
+	# 已选牌快照；作为排除集合传给AI，避免重复选中同一实体。
+	var excluded_uids: Array[int] = []
+	for selected_uid: int in _inline_selected_card_uids:
+		excluded_uids.append(selected_uid)
+	# AI建议的补选实体UID；规则只负责牌值排序，最终候选取舍仍由本地界面与请求校验共同约束。
+	var suggested_uids: Array[int] = match_controller.get_discard_auto_selection_uids(_inline_card_choice, _snapshot, excluded_uids, remaining_count)
+	# 当前请求的合法候选；只允许把请求明确公开的实体牌加入临时选择。
+	var candidate_uids: Array[int] = _get_inline_candidate_uids()
+	for suggested_uid: int in suggested_uids:
+		if _inline_selected_card_uids.size() >= max_select:
+			break
+		if candidate_uids.has(suggested_uid) and not _inline_selected_card_uids.has(suggested_uid):
+			_inline_selected_card_uids.append(suggested_uid)
+	error_label.text = ""
+	_render_local_equipment(_get_player_snapshot(match_controller.local_human_player_id))
+	_render_local_hand()
+	_refresh_selection_text()
+
+
 ## 设置全局卡牌名称模式；所有牌面与装备名称随后统一刷新。
 func _on_name_mode_pressed(mode: int) -> void:
 	GameSettings.set_card_name_mode(mode)
@@ -3879,6 +3947,9 @@ func _apply_ui_style() -> void:
 	error_label.add_theme_color_override("font_color", BattleUIStyle.get_color("danger"))
 	BATTLE_STYLE.apply_interaction_button(use_button)
 	BATTLE_STYLE.apply_interaction_button(settlement_button)
+	# 弃牌自动选择按钮始终使用普通确定/取消按钮色；主题切换只重绘其交互样式，不改变显隐条件。
+	if discard_auto_select_button != null and is_instance_valid(discard_auto_select_button):
+		BATTLE_STYLE.apply_interaction_button(discard_auto_select_button)
 	_refresh_inline_secondary_button_style()
 	if game_settlement_panel != null and is_instance_valid(game_settlement_panel):
 		game_settlement_panel.refresh_ui_style()
@@ -5854,6 +5925,10 @@ func _on_self_repair_performed(repair_report: Dictionary) -> void:
 func _refresh_selection_text() -> void:
 	_card_use_preview = {}
 	recast_button.visible = false
+	# 弃牌自动选择按钮默认隐藏；只有当前内联请求确实是弃牌阶段且达到双门槛时，
+	# 下方统一刷新入口才重新显示，避免终局、托管、开局等提前返回分支残留上一请求的按钮。
+	if discard_auto_select_button != null and is_instance_valid(discard_auto_select_button):
+		discard_auto_select_button.visible = false
 	_clear_inline_control_extra_option_buttons()
 	_inline_control_primary_option_id = ""
 	_inline_control_secondary_option_id = ""
@@ -5892,6 +5967,7 @@ func _refresh_selection_text() -> void:
 	var can_act: bool = _can_local_player_act()
 	end_play_button.visible = can_act and _inline_card_choice.is_empty()
 	end_play_button.disabled = not end_play_button.visible
+	_refresh_discard_auto_select_button()
 	if not _active_equipment_action.is_empty():
 		_refresh_equipment_action_text()
 		return
@@ -6118,6 +6194,50 @@ func _refresh_equipment_action_text() -> void:
 	interaction_guide_label.text = equipment_confirm_prompt if bool(_card_use_preview.get("can_submit", false)) else ("请选择目标" if int(_card_use_preview.get("max_targets", 0)) > 0 else "请选择手牌材料")
 	use_button.disabled = not bool(_card_use_preview.get("can_submit", false))
 	_refresh_component_states()
+
+
+## 判断当前内联请求是否属于弃牌阶段、额外弃牌阶段或调整手牌这类纯手牌弃置。
+## 只识别规则层写入的稳定 choice_type/context.kind，不按标题或提示文本猜测，避免技能费用选牌误用自动按钮。
+func _is_inline_hand_discard_choice(choice_data: Dictionary) -> bool:
+	if choice_data.is_empty():
+		return false
+	# 请求类型；普通弃牌阶段由控制器把card映射为discard，其他纯手牌弃置保留card并使用独立kind。
+	var choice_type: String = str(choice_data.get("choice_type", "card"))
+	# 请求上下文种类；仅这些纯手牌弃置允许自动选择，区域混合弃置仍由玩家逐张判断。
+	var context: Dictionary = choice_data.get("context", {}) as Dictionary
+	var choice_kind: String = str(context.get("kind", ""))
+	return choice_type == "discard" or choice_kind in ["discard_phase", "extra_discard_phase", "adjust_hand_size"]
+
+
+## 返回本次弃牌请求要求玩家选够的牌数；优先读取权威请求的最小卡牌数量。
+## 旧测试夹具或旧回放可能只携带context.discard_count，因此在最小数量缺失时才回退该字段。
+func _get_inline_required_discard_count(choice_data: Dictionary) -> int:
+	# 权威请求的卡牌下限；普通弃牌阶段的下限等于本次必须弃置的张数。
+	var minimum_count: int = int(choice_data.get("min_card_select", choice_data.get("min_select", 0)))
+	if minimum_count <= 0:
+		# 上下文弃置数量；仅在缺少标准最小数量字段时启用。
+		var context: Dictionary = choice_data.get("context", {}) as Dictionary
+		minimum_count = int(context.get("discard_count", 0))
+	return maxi(minimum_count, 0)
+
+
+## 刷新“自动选择”按钮的显隐和可用状态；按钮只在纯手牌弃置请求达到双门槛时出现。
+func _refresh_discard_auto_select_button() -> void:
+	if discard_auto_select_button == null or not is_instance_valid(discard_auto_select_button):
+		return
+	if not _is_inline_hand_discard_choice(_inline_card_choice):
+		discard_auto_select_button.visible = false
+		return
+	# 当前请求要求的最低弃置张数；这是“需要弃置的牌数”的权威口径。
+	var required_count: int = _get_inline_required_discard_count(_inline_card_choice)
+	# 本地玩家当前手牌数；只读取本地观察者快照中已经公开给自己的手牌数组。
+	var local_player: Dictionary = _get_player_snapshot(match_controller.local_human_player_id)
+	var hand_count: int = (local_player.get("hand", []) as Array).size()
+	# 是否达到双门槛；同时要求手牌数≥8且本次需要弃置≥4张。
+	var meets_threshold: bool = hand_count >= DISCARD_AUTO_SELECT_MIN_HAND_COUNT and required_count >= DISCARD_AUTO_SELECT_MIN_DISCARD_COUNT
+	discard_auto_select_button.visible = meets_threshold
+	# 已选够张数后按钮保留可见但禁用，避免玩家误以为自动选择仍能继续增加选中位。
+	discard_auto_select_button.disabled = _inline_selected_card_uids.size() >= required_count
 
 
 ## 刷新手牌区内联选择提示与操作按钮；确认必须至少选择一张且满足请求数量范围。
@@ -6452,6 +6572,12 @@ func _submit_suppressed_group_trick_choice(choice_data: Dictionary) -> void:
 ## 根据当前群体锦囊响应状态复用右侧按钮；开启时使用深灰外观，关闭时保留朱红可切换外观。
 func _refresh_group_trick_response_button() -> void:
 	if not is_node_ready() or end_play_button == null:
+		return
+	# 其他内联询问占用操作区时，右侧按钮必须让位；只有群体锦囊询问本身可以临时接管该位置。
+	# 该保护同时避免已开启“不响应”的旧状态在本回合后续弃牌询问中与“自动选择”按钮重叠。
+	if not _inline_card_choice.is_empty() and not _is_group_trick_negation_choice(_inline_card_choice):
+		end_play_button.visible = false
+		end_play_button.disabled = true
 		return
 	if not _has_group_trick_response_button_context():
 		end_play_button.text = "结束阶段"
