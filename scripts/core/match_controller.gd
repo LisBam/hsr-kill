@@ -3645,6 +3645,17 @@ func get_pending_choice_legal_actions() -> Array[Dictionary]:
 	return _build_card_choice_actions(_pending_card_choice)
 
 
+## 判断选择请求是否声明弃置自身牌；技能使用 ai_discard_cost，阶段请求兼容既有类型与上下文。
+func is_discard_auto_selection_request(choice_request: Dictionary) -> bool:
+	# 请求上下文；显式弃牌语义由内容层声明，不依赖提示文字或具体技能名称。
+	var context: Dictionary = choice_request.get("context", {}) as Dictionary
+	# 请求类型；普通弃牌阶段通过 discard 类型表达，其他旧阶段请求使用稳定 kind。
+	var choice_type: String = str(choice_request.get("choice_type", "card"))
+	# 请求种类；兼容尚未显式声明 ai_discard_cost 的阶段选择。
+	var choice_kind: String = str(context.get("kind", ""))
+	return choice_type == "discard" or bool(context.get("ai_discard_cost", false)) or choice_kind in ["discard_phase", "extra_discard_phase", "adjust_hand_size"]
+
+
 ## 为本地弃牌界面的“自动选择”按钮返回补选实体 UID；只读请求与快照，不提交动作、不修改任何状态。
 ## 该查询接受界面当前展示的请求副本，因此局域网客户端即使没有本机 _pending_card_choice 也能复用同一 AI 牌值排序。
 ## excluded_uids 是玩家已经点选、必须保留并占用选中位的牌；required_count 是仍需补选的张数。
@@ -3655,11 +3666,8 @@ func get_discard_auto_selection_uids(choice_request: Dictionary, authoritative_s
 	var chooser_id: int = int(choice_request.get("chooser_id", -1))
 	if chooser_id < 0 or chooser_id != local_human_player_id:
 		return [] as Array[int]
-	# 仅允许纯手牌弃置复用自动选择；区域混合弃置、技能费用或其他选牌没有该按钮语义。
-	var choice_type: String = str(choice_request.get("choice_type", "card"))
-	var context: Dictionary = choice_request.get("context", {}) as Dictionary
-	var choice_kind: String = str(context.get("kind", ""))
-	if choice_type != "discard" and choice_kind not in ["discard_phase", "extra_discard_phase", "adjust_hand_size"]:
+	# 只接受明确声明弃牌语义的请求，不把其他选牌误认为弃置。
+	if not is_discard_auto_selection_request(choice_request):
 		return [] as Array[int]
 	# 可补选候选 UID；排除已选牌，避免同一实体重复占用选中位。
 	var candidate_uids: Array[int] = []
@@ -3667,7 +3675,7 @@ func get_discard_auto_selection_uids(choice_request: Dictionary, authoritative_s
 		# 当前候选快照；无效 UID 或玩家已选牌不进入 AI 排序。
 		var candidate: Dictionary = candidate_variant as Dictionary
 		var candidate_uid: int = int(candidate.get("uid", -1))
-		if candidate_uid >= 0 and not excluded_uids.has(candidate_uid):
+		if candidate_uid >= 0 and int(candidate.get("owner_id", -1)) == chooser_id and str(candidate.get("zone", "")) in ["hand", "equipment", "wooden_ox"] and not excluded_uids.has(candidate_uid):
 			candidate_uids.append(candidate_uid)
 	return ai_coordinator.suggest_low_value_card_uids(chooser_id, authoritative_snapshot, candidate_uids, required_count)
 

@@ -3881,15 +3881,24 @@ func _on_discard_auto_select_pressed() -> void:
 	var excluded_uids: Array[int] = []
 	for selected_uid: int in _inline_selected_card_uids:
 		excluded_uids.append(selected_uid)
-	# AI建议的补选实体UID；规则只负责牌值排序，最终候选取舍仍由本地界面与请求校验共同约束。
-	var suggested_uids: Array[int] = match_controller.get_discard_auto_selection_uids(_inline_card_choice, _snapshot, excluded_uids, remaining_count)
-	# 当前请求的合法候选；只允许把请求明确公开的实体牌加入临时选择。
-	var candidate_uids: Array[int] = _get_inline_candidate_uids()
-	for suggested_uid: int in suggested_uids:
-		if _inline_selected_card_uids.size() >= max_select:
+	# 每补选一张重新筛选组合兼容性，避免多张单独合法的候选合并后构成非法组合。
+	for _index: int in range(remaining_count):
+		# 当前仍可追加的候选 UID；已选项由排除集合过滤。
+		var candidate_uids: Array[int] = _get_inline_candidate_uids()
+		# 当前请求副本；只把兼容当前选择的候选交给 AI 估值。
+		var compatible_request: Dictionary = _inline_card_choice.duplicate()
+		# 兼容候选快照；保留原顺序与牌区信息，不改动原请求。
+		var compatible_candidates: Array = []
+		for candidate_variant: Variant in _inline_card_choice.get("candidates", []) as Array:
+			if candidate_uids.has(int((candidate_variant as Dictionary).get("uid", -1))):
+				compatible_candidates.append(candidate_variant)
+		compatible_request["candidates"] = compatible_candidates
+		# AI 建议的一张实体牌；没有合法候选时保留已有选择并等待玩家调整。
+		var suggested_uids: Array[int] = match_controller.get_discard_auto_selection_uids(compatible_request, _snapshot, excluded_uids, 1)
+		if suggested_uids.is_empty():
 			break
-		if candidate_uids.has(suggested_uid) and not _inline_selected_card_uids.has(suggested_uid):
-			_inline_selected_card_uids.append(suggested_uid)
+		_inline_selected_card_uids.append(suggested_uids[0])
+		excluded_uids.append(suggested_uids[0])
 	error_label.text = ""
 	_render_local_equipment(_get_player_snapshot(match_controller.local_human_player_id))
 	_render_local_hand()
@@ -6206,7 +6215,10 @@ func _is_inline_hand_discard_choice(choice_data: Dictionary) -> bool:
 	# 请求上下文种类；仅这些纯手牌弃置允许自动选择，区域混合弃置仍由玩家逐张判断。
 	var context: Dictionary = choice_data.get("context", {}) as Dictionary
 	var choice_kind: String = str(context.get("kind", ""))
-	return choice_type == "discard" or choice_kind in ["discard_phase", "extra_discard_phase", "adjust_hand_size"]
+	# 技能费用可通过 ai_discard_cost 显式声明，候选也可以包括本人的装备或木牛“粮”。
+	if choice_type.is_empty() and choice_kind.is_empty() and not bool(context.get("ai_discard_cost", false)):
+		return false
+	return match_controller.is_discard_auto_selection_request(choice_data)
 
 
 ## 返回本次弃牌请求要求玩家选够的牌数；优先读取权威请求的最小卡牌数量。
