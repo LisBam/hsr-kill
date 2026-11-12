@@ -21,6 +21,8 @@ func _run() -> void:
 		return
 	if not _test_discard_batch_aggregation():
 		return
+	if not _test_equipment_replacement_is_not_discard():
+		return
 	if not _test_fanyin_black_then_red():
 		return
 	if not _test_fanyin_ai_black_target():
@@ -149,6 +151,37 @@ func _test_discard_batch_aggregation() -> bool:
 ## 记录一次批次事件的数据快照；只读取规则事件提供的稳定字段。
 func _capture_discard_batch(event: RuleEvent) -> void:
 	_captured_batches.append((event.data as Dictionary).duplicate(true))
+
+
+## 换装只将旧装备置入弃牌堆；黑红旧装备均不能产生弃置批次或触发泛音。
+func _test_equipment_replacement_is_not_discard() -> bool:
+	for suit: String in ["spade", "heart"]:
+		_reset_state(2)
+		_captured_batches.clear()
+		_controller.event_bus.subscribe("cardsDiscardedBatchAfter", self, _capture_discard_batch)
+		if _install_skill(0, "fanyin") == null:
+			return _fail("replacement_fanyin_install")
+		# 旧武器；黑色应产生目标询问，红色应摸牌，两者均用于验证不会误触发。
+		var old_card: CardInstance = CardInstance.new("qinggang", suit, 1)
+		old_card.owner_id = 0
+		old_card.zone = "equipment"
+		_controller.state.get_player(0).equipment["weapon"] = old_card
+		# 目标手牌；确保黑色泛音若误触发能够建立有效目标询问。
+		var target_card: CardInstance = CardInstance.new("shan", "club", 2)
+		target_card.owner_id = 1
+		target_card.zone = "hand"
+		_controller.state.get_player(1).hand.append(target_card)
+		# 新武器；通过正式装备安装入口替换原装备。
+		var new_card: CardInstance = CardInstance.new("zhangba", "heart", 3)
+		new_card.zone = "processing"
+		_controller.state.processing_area.append(new_card)
+		# 安装结果；无其他等待时应完成真实移动。
+		var result: RefCounted = _controller.equip_from_processing(0, new_card)
+		if not result.completed or not result.success or old_card.zone != "discard_pile" or _controller.state.get_player(0).equipment.get("weapon") != new_card:
+			return _fail("replacement_movement_" + suit)
+		if not _captured_batches.is_empty() or _controller.has_pending_card_choice() or not _controller.state.get_player(0).hand.is_empty():
+			return _fail("replacement_triggered_discard_" + suit)
+	return true
 
 
 ## 校验【泛音】黑色效果目标的AI选择：通用层不得再叠加一次目标态度，否则两层评分相消，AI 只会选中座次最靠前的角色。
