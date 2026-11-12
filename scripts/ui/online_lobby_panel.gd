@@ -353,10 +353,10 @@ func _render_room_summary() -> void:
 	var player_count_text: String = "对局人数：%d" % player_count
 	if game_mode_id == "conquest":
 		player_count_text = "玩家数：%d（敌方AI等量）" % player_count
-	_room_summary_label.text = "真人：%d  ｜  %s  ｜  房间密码：%s" % [member_count, player_count_text, password_text]
+	_room_summary_label.text = "真人：%d\n%s\n房间密码：%s" % [member_count, player_count_text, password_text]
 	# 自选身份摘要；仅开启时追加，提示所有成员当前房间按位置绑定身份。
 	if bool(_snapshot.get("custom_identity_enabled", false)):
-		_room_summary_label.text += "  ｜  自选身份：开"
+		_room_summary_label.text += "\n自选身份：开"
 		# 座位绑定摘要；只在自选身份下才有意义，明确区分“座位每局随机”与“座位按位置固定”，2v2 由模式规则强制固定。
 		_room_summary_label.text += "（座位固定）" if bool(_snapshot.get("fixed_seat_enabled", false)) else "（座位随机）"
 	(%OnlineLobbyErrorLabel as Label).visible = false
@@ -693,6 +693,7 @@ func _apply_line_edit_style(line_edit: LineEdit) -> void:
 	line_edit.add_theme_stylebox_override("normal", MENU_STYLE.make_decade_button(BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false))
 	line_edit.add_theme_stylebox_override("focus", MENU_STYLE.make_decade_button(BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), true))
 	line_edit.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
+	line_edit.add_theme_color_override("font_placeholder_color", BattleUIStyle.get_color("text_muted"))
 	line_edit.add_theme_color_override("caret_color", BattleUIStyle.get_color("accent"))
 	line_edit.add_theme_color_override("selection_color", Color(BattleUIStyle.get_color("accent"), 0.42))
 

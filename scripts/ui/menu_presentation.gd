@@ -7,6 +7,16 @@ extends Node
 const MOTION_SCRIPT: Script = preload("res://scripts/ui/menu_motion.gd")
 ## 原生按钮反馈脚本；每个按钮挂载一个无逐帧处理的Control组件。
 const BUTTON_MOTION_SCRIPT: Script = preload("res://scripts/ui/menu_button_motion.gd")
+## 模式纸卡装饰组件；每个模式按钮独立持有，业务只继续读取原生按钮的选中态。
+const MODE_CARD_SCRIPT: Script = preload("res://scripts/ui/mode_card_presentation.gd")
+## 设置表单布局组件；保持原控件实例和信号，将长列表拆成两组可滚动栏目。
+const SETTINGS_SHEET_SCRIPT: Script = preload("res://scripts/ui/settings_sheet_layout.gd")
+## 模式卡参考高度；逻辑画布720像素高时使用350像素，较矮嵌入窗口逐像素收紧。
+const MODE_CARD_HEIGHT: float = 350.0
+## 模式卡紧凑高度下限；276像素仍容纳标题页脚和徽记，低于标准画布时保证导航不被顶起。
+const MIN_MODE_CARD_HEIGHT: float = 276.0
+## 参考画布高度；保持项目720像素基准，不改变游戏窗口或牌桌尺寸。
+const REFERENCE_HEIGHT: float = 720.0
 ## 单次绘制背景组件；首页与大厅分别安装，不接触战斗背景。
 const AMBIENT_SCRIPT: Script = preload("res://scripts/ui/menu_ambient.gd")
 ## 品牌罗盘矢量；用主题强调色调制，48像素资源可按视口无损缩放。
@@ -63,6 +73,12 @@ func _install() -> void:
 		return
 	_motion = get_node("Motion") as MOTION_SCRIPT
 	_scope.set_meta(MOTION_SCRIPT.SERVICE_META, weakref(_motion))
+	_scope.resized.connect(_fit_mode_cards)
+	_fit_mode_cards()
+	# 设置面板已完成原有数据绑定后装配布局组件，避免重复建立玩家偏好连接。
+	var settings: Control = _scope.get_node_or_null("MainMenuSettingsPanel") as Control
+	if settings != null:
+		settings.add_child(SETTINGS_SHEET_SCRIPT.new())
 	for path: NodePath in page_paths:
 		# 当前页；旧场景缺少回放时可安全跳过。
 		var page: Control = _scope.get_node_or_null(path) as Control
@@ -78,7 +94,7 @@ func _install() -> void:
 	_watch_named_surface("ReplayPathModalPanel", "ReplayPathModalPanel", "modal")
 	_install_navigation()
 	_install_brand_emblem()
-	_install_hero_vignette()
+	# 首页以模式卡陈列内容；原画节点隐藏，不再安装覆盖整页的暗角。
 	_install_background(_scope, 2)
 	# 大厅单独全屏背景；其自身的背景会遮住主菜单氛围层，因此需要局部副本。
 	var lobby: Control = _scope.find_child("OnlineLobbyPanel", true, false) as Control
@@ -280,6 +296,11 @@ func _bind_button(button: BaseButton) -> void:
 	button.tree_exiting.connect(_forget_button.bind(button.get_instance_id()), CONNECT_ONE_SHOT)
 	# 模式卡的现有业务先更新标题；这里只对右侧摘要与画面播放切换表现。
 	if button.get_parent().name == "ModeCardsVBox":
+		# 卡片序号从陈列顺序取得；仅决定徽记，不参与模式选择逻辑。
+		var card_presentation: Node = MODE_CARD_SCRIPT.new()
+		card_presentation.name = "ModeCardPresentation"
+		card_presentation.set("mode_index", button.get_index())
+		button.add_child(card_presentation)
 		button.pressed.connect(_on_mode_changed)
 	# 图鉴子分类；内容仍由原组件缓存和按需创建，视觉层不重建网格。
 	if str(button.name) in ["AllCharactersTabButton", "AllGameCardsTabButton", "AllOpportunitiesTabButton"]:
@@ -303,6 +324,18 @@ func _on_mode_changed() -> void:
 	var artwork: Control = _scope.find_child("MainMenuModeBackground", true, false) as Control
 	if artwork != null:
 		_motion.reveal(artwork, "fade")
+
+
+## 紧凑嵌入画布只压缩装饰卡身；顶部导航、底部操作和文字命中区保持原规格。
+func _fit_mode_cards() -> void:
+	# 高度预算；上限维持标准陈列比例，下限保证模式页脚完整。
+	var card_height: float = clampf(MODE_CARD_HEIGHT + _scope.size.y - REFERENCE_HEIGHT, MIN_MODE_CARD_HEIGHT, MODE_CARD_HEIGHT)
+	# 原生模式容器；名称为兼容旧引用保留，实际使用HBoxContainer。
+	var cards: Node = _scope.get_node_or_null("%ModeCardsVBox")
+	if cards == null:
+		return
+	for card: Control in cards.get_children():
+		card.custom_minimum_size.y = card_height
 
 
 ## 图鉴子分页变化时让内容区轻滑进入；缓存复用和每帧牌面创建配额保持不变。

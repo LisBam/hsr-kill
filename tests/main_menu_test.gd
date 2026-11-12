@@ -16,6 +16,8 @@ func _ready() -> void:
 
 ## 验证启动页面、设置浮层和身份局开始请求；任一断言失败后以非零状态退出。
 func _run() -> void:
+	await GameDatabase.wait_until_ready()
+	GameSettings.set("_settings_file_path", "res://.godot/ui_main_menu_settings.cfg")
 	# 主菜单回归固定从身份模式开始；避免其他模式测试留下的持久化选择改变本测试的默认文案与六人开局断言。
 	GameSettings.set_next_match_mode(GameSettings.MATCH_MODE_IDENTITY)
 	# 正式主场景资源；测试必须使用玩家实际启动的场景而非构造替代界面。
@@ -30,6 +32,8 @@ func _run() -> void:
 		await get_tree().process_frame
 	# 主菜单组件；启动前必须可见并且不得已经创建对局状态。
 	var main_menu: MainMenu = main_instance.get_node("%MainMenu") as MainMenu
+	# 行为回归关闭有限过渡，避免一帧断言早于退场完成；动画时序由menu_presentation_test单独覆盖。
+	main_menu.get_node("MenuPresentation").set("animations_enabled", false)
 	# 对局控制器；点击开始游戏后由主菜单信号驱动其创建标准身份局。
 	var match_controller: MatchController = main_instance.get_node("MatchController") as MatchController
 	# 设置按钮；替代参考布局中的商店入口，点击后展示配置浮层。
@@ -157,7 +161,7 @@ func _run() -> void:
 	# 左侧模式卡滚动窗口；新增模式只能扩展滚动内容，不能压缩原有卡片尺寸。
 	var mode_scroll: ScrollContainer = main_instance.get_node("%MainMenuModeScroll") as ScrollContainer
 	# 左侧模式卡纵向容器；保持原版12像素间距并作为滚动范围的唯一内容节点。
-	var mode_cards: VBoxContainer = main_instance.get_node("%ModeCardsVBox") as VBoxContainer
+	var mode_cards: HBoxContainer = main_instance.get_node("%ModeCardsVBox") as HBoxContainer
 	# 左侧模式列表固定标题；不随模式卡滚动并保留原版48像素高度。
 	var mode_list_title: Label = main_instance.get_node("%MainMenuModeListTitle") as Label
 	# 预览底部操作栏；主题切换后其描边必须使用当前主题强调色。
@@ -183,9 +187,9 @@ func _run() -> void:
 	# 局内自选开关；当前对局为过关斩将时与主菜单使用相同纯武将文案。
 	var match_custom_character_checkbox: CheckBox = main_instance.get_node("%CustomCharacterAssignmentCheckBox") as CheckBox
 	# 主菜单车轮战明置候选标签；必须在车轮战设置页使用统一回退字体和主题文字色。
-	var main_wheel_face_up_label: Label = main_instance.get_node("MainMenu/MainMenuSettingsPanel/SettingsVBox/WheelDuelFaceUpCandidateRow/WheelDuelFaceUpCandidateLabel") as Label
+	var main_wheel_face_up_label: Label = main_menu.find_child("WheelDuelFaceUpCandidateLabel", true, false) as Label
 	# 主菜单车轮战暗置候选标签；与明置标签共同验证局外菜单的字体和颜色覆盖。
-	var main_wheel_face_down_label: Label = main_instance.get_node("MainMenu/MainMenuSettingsPanel/SettingsVBox/WheelDuelFaceDownCandidateRow/WheelDuelFaceDownCandidateLabel") as Label
+	var main_wheel_face_down_label: Label = main_menu.find_child("WheelDuelFaceDownCandidateLabel", true, false) as Label
 	# 主菜单车轮战明置候选输入；其内部文本框必须使用主题字体、文字色和光标色。
 	var main_wheel_face_up_input: SpinBox = main_instance.get_node("%WheelDuelFaceUpCandidateInput") as SpinBox
 	# 主菜单车轮战暗置候选输入；数值与局内菜单共享同一GameSettings配置。
@@ -210,7 +214,7 @@ func _run() -> void:
 	if main_menu_card_name_option == null or match_menu_card_name_option == null or main_menu_card_name_option.item_count != 2 or match_menu_card_name_option.item_count != 2 or main_menu_card_name_option.get_item_text(0) != "崩铁杀" or main_menu_card_name_option.get_item_text(1) != "三国杀":
 		_fail("card_name_option_layout")
 		return
-	if main_menu_ui_style_option == null or main_menu_ui_style_option.item_count != 3 or main_menu_ui_style_option.get_item_text(0) != "崩铁风格" or main_menu_ui_style_option.get_item_text(1) != "暖木家园" or main_menu_ui_style_option.get_item_text(2) != "高级黑金" or str(main_menu_ui_style_option.get_item_metadata(2)) != UIStyleRegistry.STYLE_PREMIUM_BLACK_GOLD:
+	if main_menu_ui_style_option == null or main_menu_ui_style_option.item_count != 3 or main_menu_ui_style_option.get_item_text(0) != "星穹 · 纸金" or main_menu_ui_style_option.get_item_text(1) != "暖木家园" or main_menu_ui_style_option.get_item_text(2) != "高级黑金" or str(main_menu_ui_style_option.get_item_metadata(2)) != UIStyleRegistry.STYLE_PREMIUM_BLACK_GOLD:
 		_fail("ui_style_option_layout")
 		return
 	# 主菜单名称模式选择；通过实际下拉信号写入全局设置并同步到局内同构下拉框。
@@ -268,26 +272,26 @@ func _run() -> void:
 		_fail("wheel_duel_menu_settings_style_or_sync")
 		return
 	# 模式卡滚动范围；七张100像素卡片加六段12像素间距必须高于可视区，确保新增入口通过滚动浏览而非缩小。
-	var mode_scroll_bar: VScrollBar = mode_scroll.get_v_scroll_bar() if mode_scroll != null else null
-	if mode_scroll == null or mode_cards == null or mode_list_title == null or mode_scroll.horizontal_scroll_mode != ScrollContainer.SCROLL_MODE_DISABLED or mode_scroll.vertical_scroll_mode != ScrollContainer.SCROLL_MODE_SHOW_ALWAYS or absf(mode_list_title.custom_minimum_size.y - 48.0) > 0.5 or mode_cards.get_theme_constant("separation") != 12 or absf(identity_mode_button.custom_minimum_size.y - 100.0) > 0.5 or absf(doudizhu_mode_button.custom_minimum_size.y - 100.0) > 0.5 or absf(team2v2_mode_button.custom_minimum_size.y - 100.0) > 0.5 or absf(wheel_duel_mode_button.custom_minimum_size.y - 100.0) > 0.5 or absf(opportunity_brawl_mode_button.custom_minimum_size.y - 100.0) > 0.5 or absf(conquest_mode_button.custom_minimum_size.y - 100.0) > 0.5 or absf(winner_takes_all_mode_button.custom_minimum_size.y - 100.0) > 0.5 or mode_scroll_bar == null or mode_scroll_bar.max_value <= mode_scroll_bar.page:
+	var mode_scroll_bar: HScrollBar = mode_scroll.get_h_scroll_bar() if mode_scroll != null else null
+	if mode_scroll == null or mode_cards == null or mode_list_title == null or mode_scroll.horizontal_scroll_mode != ScrollContainer.SCROLL_MODE_SHOW_ALWAYS or mode_scroll.vertical_scroll_mode != ScrollContainer.SCROLL_MODE_DISABLED or absf(mode_list_title.custom_minimum_size.y - 40.0) > 0.5 or mode_cards.get_theme_constant("separation") != 20 or absf(identity_mode_button.custom_minimum_size.y - 350.0) > 0.5 or absf(doudizhu_mode_button.custom_minimum_size.y - 350.0) > 0.5 or absf(team2v2_mode_button.custom_minimum_size.y - 350.0) > 0.5 or absf(wheel_duel_mode_button.custom_minimum_size.y - 350.0) > 0.5 or absf(opportunity_brawl_mode_button.custom_minimum_size.y - 350.0) > 0.5 or absf(conquest_mode_button.custom_minimum_size.y - 350.0) > 0.5 or absf(winner_takes_all_mode_button.custom_minimum_size.y - 350.0) > 0.5 or mode_scroll_bar == null or mode_scroll_bar.max_value <= mode_scroll_bar.page:
 		_fail("mode_scroll_layout title=%s cards=%s range=%s/%s" % [str(mode_list_title.custom_minimum_size if mode_list_title != null else Vector2.ZERO), str(mode_cards.get_theme_constant("separation") if mode_cards != null else -1), str(mode_scroll_bar.max_value if mode_scroll_bar != null else -1.0), str(mode_scroll_bar.page if mode_scroll_bar != null else -1.0)])
 		return
 	# 滑条轨道样式；上下内容边距为0才能让滑块在最小值和最大值处真正贴合轨道端点。
 	var mode_scroll_track_style: StyleBoxFlat = mode_scroll_bar.get_theme_stylebox("scroll") as StyleBoxFlat
 	# 滑条常态拖块样式；与轨道共用零边距几何，悬停和按下态由同一工厂生成。
 	var mode_scroll_grabber_style: StyleBoxFlat = mode_scroll_bar.get_theme_stylebox("grabber") as StyleBoxFlat
-	if mode_scroll_track_style == null or mode_scroll_grabber_style == null or not is_zero_approx(mode_scroll_track_style.content_margin_top) or not is_zero_approx(mode_scroll_track_style.content_margin_bottom) or not is_zero_approx(mode_scroll_grabber_style.content_margin_top) or not is_zero_approx(mode_scroll_grabber_style.content_margin_bottom):
-		_fail("mode_scroll_endpoint_margins track=%s/%s grabber=%s/%s" % [str(mode_scroll_track_style.content_margin_top if mode_scroll_track_style != null else -1.0), str(mode_scroll_track_style.content_margin_bottom if mode_scroll_track_style != null else -1.0), str(mode_scroll_grabber_style.content_margin_top if mode_scroll_grabber_style != null else -1.0), str(mode_scroll_grabber_style.content_margin_bottom if mode_scroll_grabber_style != null else -1.0)])
+	if mode_scroll_track_style == null or mode_scroll_grabber_style == null or not is_zero_approx(mode_scroll_track_style.content_margin_left) or not is_zero_approx(mode_scroll_track_style.content_margin_right) or not is_zero_approx(mode_scroll_grabber_style.content_margin_left) or not is_zero_approx(mode_scroll_grabber_style.content_margin_right):
+		_fail("mode_scroll_endpoint_margins track=%s/%s grabber=%s/%s" % [str(mode_scroll_track_style.content_margin_left if mode_scroll_track_style != null else -1.0), str(mode_scroll_track_style.content_margin_right if mode_scroll_track_style != null else -1.0), str(mode_scroll_grabber_style.content_margin_left if mode_scroll_grabber_style != null else -1.0), str(mode_scroll_grabber_style.content_margin_right if mode_scroll_grabber_style != null else -1.0)])
 		return
 	# 滚动到底部后第七张模式卡必须完整进入视口；证明模式入口没有依赖裁切区域外的不可点击节点。
-	mode_scroll.scroll_vertical = roundi(mode_scroll_bar.max_value - mode_scroll_bar.page)
+	mode_scroll.scroll_horizontal = roundi(mode_scroll_bar.max_value - mode_scroll_bar.page)
 	await get_tree().process_frame
 	await get_tree().process_frame
 	# 胜者为王模式卡全局矩形；滚动到底部后必须完整位于可视窗口内。
 	var winner_takes_all_mode_rect: Rect2 = winner_takes_all_mode_button.get_global_rect()
 	# 模式滚动窗口全局矩形；用于与第七张模式卡边界比较。
 	var mode_scroll_rect: Rect2 = mode_scroll.get_global_rect()
-	if winner_takes_all_mode_rect.position.y < mode_scroll_rect.position.y - 0.5 or winner_takes_all_mode_rect.end.y > mode_scroll_rect.end.y + 0.5:
+	if winner_takes_all_mode_rect.position.x < mode_scroll_rect.position.x - 0.5 or winner_takes_all_mode_rect.end.x > mode_scroll_rect.end.x + 0.5:
 		_fail("mode_scroll_bottom_visibility card=%s viewport=%s" % [str(winner_takes_all_mode_rect), str(mode_scroll_rect)])
 		return
 	# 滚轮交互；向下滚动必须改变内容位置，并让纵向滑条同步到同一值。
@@ -303,7 +307,7 @@ func _run() -> void:
 	get_viewport().push_input(wheel_down_event, true)
 	await get_tree().process_frame
 	# 滚轮后的内容滚动值；必须为正并与拖条值一致。
-	var wheel_scroll_value: int = mode_scroll.scroll_vertical
+	var wheel_scroll_value: int = mode_scroll.scroll_horizontal
 	if wheel_scroll_value <= 0 or not is_equal_approx(mode_scroll_bar.value, wheel_scroll_value):
 		_fail("mode_scroll_wheel_down scroll=%d bar=%f" % [wheel_scroll_value, mode_scroll_bar.value])
 		return
@@ -315,8 +319,8 @@ func _run() -> void:
 	wheel_up_event.factor = 1.0
 	get_viewport().push_input(wheel_up_event, true)
 	await get_tree().process_frame
-	if mode_scroll.scroll_vertical != 0 or not is_zero_approx(mode_scroll_bar.value):
-		_fail("mode_scroll_wheel_up scroll=%d bar=%f" % [mode_scroll.scroll_vertical, mode_scroll_bar.value])
+	if mode_scroll.scroll_horizontal != 0 or not is_zero_approx(mode_scroll_bar.value):
+		_fail("mode_scroll_wheel_up scroll=%d bar=%f" % [mode_scroll.scroll_horizontal, mode_scroll_bar.value])
 		return
 	# 恢复底部视口；后续原有断言继续从第六张模式卡可见的位置验证真实点击。
 	main_menu.call("_set_mode_scroll_vertical", mode_scroll_bar.max_value - mode_scroll_bar.page)
@@ -329,9 +333,9 @@ func _run() -> void:
 		return
 	# 过关斩将专属开局设置；换将卡与随机选将牌数均须显示，车轮战专属候选则不得误入该模式。
 	# 主菜单过关斩将换将卡设置行；该模式保留普通换将配置。
-	var main_conquest_replacement_row: Control = main_instance.get_node("MainMenu/MainMenuSettingsPanel/SettingsVBox/MainMenuCharacterReplacementCountRow") as Control
+	var main_conquest_replacement_row: Control = main_menu.find_child("MainMenuCharacterReplacementCountRow", true, false) as Control
 	# 主菜单过关斩将随机候选设置行；该模式保留普通候选数量配置。
-	var main_conquest_candidate_row: Control = main_instance.get_node("MainMenu/MainMenuSettingsPanel/SettingsVBox/MainMenuCharacterCandidateCountRow") as Control
+	var main_conquest_candidate_row: Control = main_menu.find_child("MainMenuCharacterCandidateCountRow", true, false) as Control
 	# 主菜单过关斩将难度设置行；只在该模式显示。
 	var main_conquest_difficulty_row: Control = main_instance.get_node("%MainMenuConquestDifficultyRow") as Control
 	# 主菜单过关斩将难度下拉框；选项元数据与全局难度同步。
@@ -373,7 +377,7 @@ func _run() -> void:
 	if mode_details_panel.visible:
 		_fail("conquest_details_close")
 		return
-	mode_scroll.scroll_vertical = 0
+	mode_scroll.scroll_horizontal = 0
 	await get_tree().process_frame
 	await _click_control(identity_mode_button)
 	await get_tree().process_frame
@@ -401,7 +405,7 @@ func _run() -> void:
 		_fail("opportunity_brawl_details_button_hidden")
 		return
 	main_menu.call("_select_identity_mode")
-	if top_identity_mode_button.text != "模式选择" or identity_mode_name.text != "身份模式" or identity_mode_name.get_theme_font_size("font_size") != 27 or opportunity_brawl_mode_name.get_theme_font_size("font_size") != 27 or conquest_mode_name.get_theme_font_size("font_size") != 27 or winner_takes_all_mode_name.get_theme_font_size("font_size") != 27 or identity_mode_player_count.text != "2-10人" or mode_rule_hint.text != "随机身份 · 阵营对抗":
+	if top_identity_mode_button.text != "模式选择" or identity_mode_name.text != "身份模式" or identity_mode_name.get_theme_font_size("font_size") != 25 or opportunity_brawl_mode_name.get_theme_font_size("font_size") != 25 or conquest_mode_name.get_theme_font_size("font_size") != 25 or winner_takes_all_mode_name.get_theme_font_size("font_size") != 25 or identity_mode_player_count.text != "2-10人" or mode_rule_hint.text != "随机身份 · 阵营对抗":
 		_fail("identity_mode_copy")
 		return
 	# 胜者为王详情；正文必须完整记录座次补偿的分段数值，这是该开关唯一的长期说明入口。
@@ -426,6 +430,8 @@ func _run() -> void:
 	# 默认客户区矩形；打开联机设置前记录，用于断言资料页与模式预览使用同一客户区，而不是全屏弹层。
 	var mode_page_rect: Rect2 = main_frame.get_global_rect()
 	await _click_control(online_settings_button)
+	if not await _wait_gallery_ready(online_settings_panel):
+		return
 	await get_tree().process_frame
 	# 动态联机形象牌；每个数据库武将都必须对应一张正式 PlayerTargetView 候选。
 	var online_avatar_views: Array[Node] = online_avatar_content.find_children("*", "PlayerTargetView", true, false)
@@ -437,6 +443,10 @@ func _run() -> void:
 		# 当前联机形象预览快照；character_id 必须按共享势力顺序连续排列。
 		var online_avatar_snapshot: Dictionary = online_avatar_view.get("_player_snapshot") as Dictionary
 		online_avatar_character_ids.append(str(online_avatar_snapshot.get("character_id", "")))
+	# 按需实例化只覆盖可视范围；排序与完整性通过全部目录槽验证。
+	online_avatar_character_ids.clear()
+	for entry: Dictionary in online_settings_panel.get("_avatar_entries") as Array:
+		online_avatar_character_ids.append(str(entry["id"]))
 	# 联机形象期望武将顺序；复制数据库 ID 后用图鉴共享排序器生成。
 	var expected_online_avatar_character_ids: Array[String] = []
 	for online_character_id_variant: Variant in GameDatabase.characters.keys():
@@ -444,8 +454,8 @@ func _run() -> void:
 	expected_online_avatar_character_ids.sort_custom(CardGallerySort.sort_character_ids)
 	# 联机设置页矩形；必须贴合原主菜单客户区，顶部导航仍可聚焦并可对等切回模式选择。
 	var online_settings_rect: Rect2 = online_settings_panel.get_global_rect()
-	if not online_settings_panel.visible or main_frame.visible or online_player_name_input.max_length != GameSettings.MAX_ONLINE_PLAYER_NAME_LENGTH or online_avatar_views.size() != GameDatabase.characters.size() or online_avatar_character_ids != expected_online_avatar_character_ids or start_game_button.focus_mode != Control.FOCUS_NONE or top_identity_mode_button.focus_mode == Control.FOCUS_NONE or online_settings_button.focus_mode == Control.FOCUS_NONE or not online_settings_button.button_pressed or top_identity_mode_button.button_pressed or not (main_instance.get_node("%TopOnlineSettingsIndicator") as ColorRect).visible or (main_instance.get_node("%TopIdentityModeIndicator") as ColorRect).visible or absf(online_settings_rect.position.x - mode_page_rect.position.x) > 0.5 or absf(online_settings_rect.position.y - mode_page_rect.position.y) > 0.5 or absf(online_settings_rect.size.x - mode_page_rect.size.x) > 0.5 or absf(online_settings_rect.size.y - mode_page_rect.size.y) > 0.5 or absf(online_side_list.custom_minimum_size.x - mode_list.custom_minimum_size.x) > 0.5 or not online_profile_section_button.button_pressed or absf(online_action_panel.size.y - 92.0) > 1.0:
-		_fail("online_settings_open")
+	if not online_settings_panel.visible or main_frame.visible or online_player_name_input.max_length != GameSettings.MAX_ONLINE_PLAYER_NAME_LENGTH or online_avatar_views.is_empty() or (online_settings_panel.get("_avatar_entries") as Array).size() != GameDatabase.characters.size() or online_avatar_character_ids != expected_online_avatar_character_ids or start_game_button.focus_mode != Control.FOCUS_NONE or top_identity_mode_button.focus_mode == Control.FOCUS_NONE or online_settings_button.focus_mode == Control.FOCUS_NONE or not online_settings_button.button_pressed or top_identity_mode_button.button_pressed or not (main_instance.get_node("%TopOnlineSettingsIndicator") as ColorRect).visible or (main_instance.get_node("%TopIdentityModeIndicator") as ColorRect).visible or absf(online_settings_rect.position.x - mode_page_rect.position.x) > 0.5 or absf(online_settings_rect.position.y - mode_page_rect.position.y) > 0.5 or absf(online_settings_rect.size.x - mode_page_rect.size.x) > 0.5 or absf(online_settings_rect.size.y - mode_page_rect.size.y) > 0.5 or absf(online_side_list.custom_minimum_size.x - mode_list.custom_minimum_size.x) > 0.5 or not online_profile_section_button.button_pressed or absf(online_action_panel.size.y - 92.0) > 1.0:
+		_fail("online_settings_open avatars=%d/%d rect=%s/%s selected=%s focus=%d action=%s scroll=%s entries=%d paused=%s" % [online_avatar_views.size(), GameDatabase.characters.size(), online_settings_rect, mode_page_rect, online_profile_section_button.button_pressed, start_game_button.focus_mode, online_action_panel.size, (online_settings_panel.get_node("%OnlineAvatarScroll") as Control).size, (online_settings_panel.get("_avatar_entries") as Array).size(), get_tree().paused])
 		return
 	# 测试选择的武将牌；读取组件内部的只读预览快照，仅用于确认点击保存的是稳定武将 ID。
 	# 选择当前可视区首张武将牌；测试目标是验证稳定ID保存，不依赖滚动容器末项是否处于当前视口。
@@ -465,6 +475,8 @@ func _run() -> void:
 		return
 	# 顶部导航对等切页；再次进入联机设置后点击“模式选择”必须直接切回默认内容，而不是依赖保存/取消弹窗。
 	await _click_control(online_settings_button)
+	if not await _wait_gallery_ready(online_settings_panel):
+		return
 	await get_tree().process_frame
 	if not online_settings_panel.visible or main_frame.visible or not online_settings_button.button_pressed or top_identity_mode_button.button_pressed or top_identity_mode_button.focus_mode == Control.FOCUS_NONE:
 		_fail("online_settings_reopen_page")
@@ -476,6 +488,8 @@ func _run() -> void:
 		return
 	# 打开所有卡牌对等内容页；默认子分页必须完整读取全部已登记武将且复用正式武将牌场景。
 	await _click_control(all_cards_button)
+	if not await _wait_gallery_ready(all_cards_panel):
+		return
 	await get_tree().process_frame
 	await get_tree().process_frame
 	# 所有卡牌页客户区矩形；必须与模式选择页严格对齐且不覆盖顶部导航。
@@ -494,7 +508,7 @@ func _run() -> void:
 	var all_cards_scroll_track_style: StyleBoxFlat = all_cards_scroll_bar.get_theme_stylebox("scroll") as StyleBoxFlat
 	# 图鉴滑条常态拖块样式；必须复用模式列表拖块的背景色与描边色。
 	var all_cards_scroll_grabber_style: StyleBoxFlat = all_cards_scroll_bar.get_theme_stylebox("grabber") as StyleBoxFlat
-	if not all_cards_panel.visible or main_frame.visible or online_settings_panel.visible or not all_cards_button.button_pressed or top_identity_mode_button.button_pressed or online_settings_button.button_pressed or not (main_instance.get_node("%TopAllCardsIndicator") as ColorRect).visible or (main_instance.get_node("%TopIdentityModeIndicator") as ColorRect).visible or (main_instance.get_node("%TopOnlineSettingsIndicator") as ColorRect).visible or not all_characters_tab_button.button_pressed or all_game_cards_tab_button.button_pressed or all_opportunities_tab_button.button_pressed or all_character_views.size() != GameDatabase.characters.size() or all_character_ids != expected_online_avatar_character_ids or CardGallerySort.CHARACTER_FACTION_ORDER != ["xingqionglieche", "yinhexvezhe", "beiluoboge", "xianzhou", "pinuokangni", "wengfaluosi"] or absf(all_cards_page_rect.position.x - mode_page_rect.position.x) > 0.5 or absf(all_cards_page_rect.position.y - mode_page_rect.position.y) > 0.5 or absf(all_cards_page_rect.size.x - mode_page_rect.size.x) > 0.5 or absf(all_cards_page_rect.size.y - mode_page_rect.size.y) > 0.5 or absf(all_cards_side_list.custom_minimum_size.x - mode_list.custom_minimum_size.x) > 0.5 or start_game_button.focus_mode != Control.FOCUS_NONE or all_cards_button.focus_mode == Control.FOCUS_NONE or all_cards_grid_scroll.vertical_scroll_mode != ScrollContainer.SCROLL_MODE_SHOW_ALWAYS or all_cards_scroll_bar == null or absf(all_cards_scroll_bar.custom_minimum_size.x - mode_scroll_bar.custom_minimum_size.x) > 0.5 or all_cards_scroll_track_style == null or all_cards_scroll_grabber_style == null or not all_cards_scroll_track_style.bg_color.is_equal_approx(mode_scroll_track_style.bg_color) or not all_cards_scroll_track_style.border_color.is_equal_approx(mode_scroll_track_style.border_color) or not all_cards_scroll_grabber_style.bg_color.is_equal_approx(mode_scroll_grabber_style.bg_color) or not all_cards_scroll_grabber_style.border_color.is_equal_approx(mode_scroll_grabber_style.border_color) or not is_zero_approx(all_cards_scroll_track_style.content_margin_top) or not is_zero_approx(all_cards_scroll_track_style.content_margin_bottom):
+	if not all_cards_panel.visible or main_frame.visible or online_settings_panel.visible or not all_cards_button.button_pressed or top_identity_mode_button.button_pressed or online_settings_button.button_pressed or not (main_instance.get_node("%TopAllCardsIndicator") as ColorRect).visible or (main_instance.get_node("%TopIdentityModeIndicator") as ColorRect).visible or (main_instance.get_node("%TopOnlineSettingsIndicator") as ColorRect).visible or not all_characters_tab_button.button_pressed or all_game_cards_tab_button.button_pressed or all_opportunities_tab_button.button_pressed or all_character_views.is_empty() or all_character_ids != expected_online_avatar_character_ids or CardGallerySort.CHARACTER_FACTION_ORDER != ["xingqionglieche", "yinhexvezhe", "beiluoboge", "xianzhou", "pinuokangni", "wengfaluosi"] or absf(all_cards_page_rect.position.x - mode_page_rect.position.x) > 0.5 or absf(all_cards_page_rect.position.y - mode_page_rect.position.y) > 0.5 or absf(all_cards_page_rect.size.x - mode_page_rect.size.x) > 0.5 or absf(all_cards_page_rect.size.y - mode_page_rect.size.y) > 0.5 or absf(all_cards_side_list.custom_minimum_size.x - mode_list.custom_minimum_size.x) > 0.5 or start_game_button.focus_mode != Control.FOCUS_NONE or all_cards_button.focus_mode == Control.FOCUS_NONE or all_cards_grid_scroll.vertical_scroll_mode != ScrollContainer.SCROLL_MODE_SHOW_ALWAYS or all_cards_scroll_bar == null or all_cards_scroll_bar.custom_minimum_size.x < 8.0 or all_cards_scroll_track_style == null or all_cards_scroll_grabber_style == null or not is_zero_approx(all_cards_scroll_track_style.content_margin_top) or not is_zero_approx(all_cards_scroll_track_style.content_margin_bottom):
 		_fail("all_cards_characters_open")
 		return
 	# 当前图鉴最右侧牌面边界；所有可见牌均应停在滚动条安全留白左侧。
@@ -525,7 +539,7 @@ func _run() -> void:
 		_fail("all_cards_character_information_layout")
 		return
 	for character_skill_name_label: Label in character_information_skill_names:
-		if not character_skill_name_label.get_theme_color("font_color").is_equal_approx(all_cards_panel.information_skill_name_color):
+		if not character_skill_name_label.get_theme_color("font_color").is_equal_approx(BattleUIStyle.get_color("text_guide") if bool(UIStyleRegistry.get_value(BattleUIStyle.get_active_style_id(), "paper_theme", false)) else all_cards_panel.information_skill_name_color):
 			_fail("all_cards_character_skill_name_color")
 			return
 	await _click_control(all_cards_panel.get_node("%AllCardsInfoCloseButton") as Button)
@@ -562,6 +576,8 @@ func _run() -> void:
 	await get_tree().process_frame
 	# 切换所有游戏牌；每个稳定卡牌定义只创建一张正式 CardView 代表牌面。
 	await _click_control(all_game_cards_tab_button)
+	if not await _wait_gallery_ready(all_cards_panel):
+		return
 	await get_tree().process_frame
 	await get_tree().process_frame
 	# 所有游戏牌正式牌面节点；数量必须等于数据库唯一游戏牌定义总数。
@@ -577,7 +593,7 @@ func _run() -> void:
 	for game_card_id_variant: Variant in GameDatabase.cards.keys():
 		expected_game_card_ids.append(str(game_card_id_variant))
 	expected_game_card_ids.sort_custom(CardGallerySort.sort_game_card_ids)
-	if not all_game_cards_tab_button.button_pressed or all_characters_tab_button.button_pressed or all_game_card_views.size() != GameDatabase.cards.size() or (all_cards_panel.get("_entries") as Array).size() != GameDatabase.cards.size() or all_game_card_ids != expected_game_card_ids or int(CardGallerySort.GAME_CARD_TYPE_ORDER.get("basic", -1)) != 0 or int(CardGallerySort.GAME_CARD_TYPE_ORDER.get("trick", -1)) != 1 or int(CardGallerySort.GAME_CARD_TYPE_ORDER.get("equipment", -1)) != 2 or int(CardGallerySort.BASIC_CARD_ORDER.get("杀", -1)) != 0 or int(CardGallerySort.BASIC_CARD_ORDER.get("闪", -1)) != 1 or int(CardGallerySort.BASIC_CARD_ORDER.get("桃", -1)) != 2 or int(CardGallerySort.BASIC_CARD_ORDER.get("酒", -1)) != 3 or int(CardGallerySort.EQUIPMENT_SUBTYPE_ORDER.get("weapon", -1)) != 0 or int(CardGallerySort.EQUIPMENT_SUBTYPE_ORDER.get("armor", -1)) != 1 or int(CardGallerySort.EQUIPMENT_SUBTYPE_ORDER.get("offensive_mount", -1)) != 2 or int(CardGallerySort.EQUIPMENT_SUBTYPE_ORDER.get("defensive_mount", -1)) != 3 or int(CardGallerySort.EQUIPMENT_SUBTYPE_ORDER.get("treasure", -1)) != 4:
+	if not all_game_cards_tab_button.button_pressed or all_characters_tab_button.button_pressed or all_game_card_views.is_empty() or (all_cards_panel.get("_entries") as Array).size() != GameDatabase.cards.size() or all_game_card_ids != expected_game_card_ids or int(CardGallerySort.GAME_CARD_TYPE_ORDER.get("basic", -1)) != 0 or int(CardGallerySort.GAME_CARD_TYPE_ORDER.get("trick", -1)) != 1 or int(CardGallerySort.GAME_CARD_TYPE_ORDER.get("equipment", -1)) != 2 or int(CardGallerySort.BASIC_CARD_ORDER.get("杀", -1)) != 0 or int(CardGallerySort.BASIC_CARD_ORDER.get("闪", -1)) != 1 or int(CardGallerySort.BASIC_CARD_ORDER.get("桃", -1)) != 2 or int(CardGallerySort.BASIC_CARD_ORDER.get("酒", -1)) != 3 or int(CardGallerySort.EQUIPMENT_SUBTYPE_ORDER.get("weapon", -1)) != 0 or int(CardGallerySort.EQUIPMENT_SUBTYPE_ORDER.get("armor", -1)) != 1 or int(CardGallerySort.EQUIPMENT_SUBTYPE_ORDER.get("offensive_mount", -1)) != 2 or int(CardGallerySort.EQUIPMENT_SUBTYPE_ORDER.get("defensive_mount", -1)) != 3 or int(CardGallerySort.EQUIPMENT_SUBTYPE_ORDER.get("treasure", -1)) != 4:
 		_fail("all_cards_game_cards")
 		return
 	# 首张游戏牌透明输入区域；真实点击后应打开当前名称模式下的完整规则资料。
@@ -591,11 +607,13 @@ func _run() -> void:
 	await get_tree().process_frame
 	# 切换所有机缘；完整目录包含灰色关卡机缘并全部复用正式 OpportunityCardView。
 	await _click_control(all_opportunities_tab_button)
+	if not await _wait_gallery_ready(all_cards_panel):
+		return
 	await get_tree().process_frame
 	await get_tree().process_frame
 	# 所有机缘正式牌面节点；数量必须等于 OpportunityCatalog 完整目录总数。
 	var all_opportunity_views: Array[Node] = all_cards_grid_content.find_children("*", "OpportunityCardView", true, false)
-	if not all_opportunities_tab_button.button_pressed or all_game_cards_tab_button.button_pressed or all_opportunity_views.size() != OpportunityCatalog.get_all_cards().size() or (all_cards_panel.get("_entries") as Array).size() != OpportunityCatalog.get_all_cards().size():
+	if not all_opportunities_tab_button.button_pressed or all_game_cards_tab_button.button_pressed or all_opportunity_views.is_empty() or (all_cards_panel.get("_entries") as Array).size() != OpportunityCatalog.get_all_cards().size():
 		_fail("all_cards_opportunities")
 		return
 	# 灰卡搜索关键词；品质名称应命中所有灰色关卡机缘且不命中普通随机品质。
@@ -690,12 +708,12 @@ func _run() -> void:
 		"start":start_game_button.text,
 		"mode":(main_instance.get_node("%IdentityModeName") as Label).text,
 	}
-	if not menu_background.color.is_equal_approx(Color("0f1017")) or not (top_navigation.get_theme_stylebox("panel") as StyleBoxFlat).bg_color.is_equal_approx(Color("171824")) or not (top_navigation.get_theme_stylebox("panel") as StyleBoxFlat).border_color.is_equal_approx(UIStyleRegistry.get_color(UIStyleRegistry.STYLE_PREMIUM_BLACK_GOLD, "border")) or premium_mode_list_style == null or not premium_mode_list_style.bg_color.is_equal_approx(Color("1b1b26")) or premium_top_selected_style == null or not premium_top_selected_style.bg_color.is_equal_approx(Color("181924")) or premium_settings_style == null or not premium_settings_style.bg_color.is_equal_approx(Color("1f1f24")) or premium_start_style == null or not premium_start_style.bg_color.is_equal_approx(Color("38302d")) or premium_identity_selected_style == null or not premium_identity_selected_style.bg_color.is_equal_approx(expected_premium_selected_mode_background) or not identity_mode_name.get_theme_color("font_color").is_equal_approx(Color("d8caba")) or not (action_panel.get_theme_stylebox("panel") as StyleBoxFlat).border_color.is_equal_approx(UIStyleRegistry.get_color(UIStyleRegistry.STYLE_PREMIUM_BLACK_GOLD, "accent")) or not (ai_response_slider.get_theme_stylebox("grabber_area") as StyleBoxFlat).border_color.is_equal_approx(UIStyleRegistry.get_color(UIStyleRegistry.STYLE_PREMIUM_BLACK_GOLD, "accent")) or not (player_count_line_edit.get_theme_stylebox("normal") as StyleBoxFlat).border_color.is_equal_approx(UIStyleRegistry.get_color(UIStyleRegistry.STYLE_PREMIUM_BLACK_GOLD, "border")) or refreshed_main_menu_texts != preserved_main_menu_texts:
-		_fail("premium_theme_refresh")
+	if not menu_background.color.is_equal_approx(Color("0f1017")) or not (top_navigation.get_theme_stylebox("panel") as StyleBoxFlat).bg_color.is_equal_approx(Color("171824")) or not (top_navigation.get_theme_stylebox("panel") as StyleBoxFlat).border_color.is_equal_approx(Color(UIStyleRegistry.get_color(UIStyleRegistry.STYLE_PREMIUM_BLACK_GOLD, "border"), 0.30)) or premium_mode_list_style == null or not premium_mode_list_style.bg_color.is_equal_approx(Color.TRANSPARENT) or premium_top_selected_style == null or not premium_top_selected_style.bg_color.is_equal_approx(BattleUIStyle.get_color("panel")) or premium_settings_style == null or not premium_settings_style.bg_color.is_equal_approx(Color("1f1f24")) or premium_start_style == null or not premium_start_style.bg_color.is_equal_approx(BattleUIStyle.get_color("accent")) or premium_identity_selected_style == null or not premium_identity_selected_style.bg_color.is_equal_approx(expected_premium_selected_mode_background) or not identity_mode_name.get_theme_color("font_color").is_equal_approx(BattleUIStyle.on_dark()) or not (action_panel.get_theme_stylebox("panel") as StyleBoxFlat).border_color.is_equal_approx(Color.TRANSPARENT) or not (ai_response_slider.get_theme_stylebox("grabber_area") as StyleBoxFlat).bg_color.is_equal_approx(Color(UIStyleRegistry.get_color(UIStyleRegistry.STYLE_PREMIUM_BLACK_GOLD, "accent"), 0.72)) or not (player_count_line_edit.get_theme_stylebox("normal") as StyleBoxFlat).border_color.is_equal_approx(Color(UIStyleRegistry.get_color(UIStyleRegistry.STYLE_PREMIUM_BLACK_GOLD, "border"), 0.48)) or refreshed_main_menu_texts != preserved_main_menu_texts:
+		_fail("premium_theme_refresh bg=%s nav=%s/%s list=%s selected=%s settings=%s start=%s card=%s/%s action=%s slider=%s input=%s" % [menu_background.color, (top_navigation.get_theme_stylebox("panel") as StyleBoxFlat).bg_color, (top_navigation.get_theme_stylebox("panel") as StyleBoxFlat).border_color, premium_mode_list_style.bg_color, premium_top_selected_style.bg_color, premium_settings_style.bg_color, premium_start_style.bg_color, premium_identity_selected_style.bg_color, expected_premium_selected_mode_background, (action_panel.get_theme_stylebox("panel") as StyleBoxFlat).border_color, (ai_response_slider.get_theme_stylebox("grabber_area") as StyleBoxFlat).bg_color, (player_count_line_edit.get_theme_stylebox("normal") as StyleBoxFlat).border_color])
 		return
 	GameSettings.set_ui_style(UIStyleRegistry.STYLE_DECADE_WOOD)
 	await get_tree().process_frame
-	if not (top_navigation.get_theme_stylebox("panel") as StyleBoxFlat).border_color.is_equal_approx(UIStyleRegistry.get_color(UIStyleRegistry.STYLE_DECADE_WOOD, "border")):
+	if not (top_navigation.get_theme_stylebox("panel") as StyleBoxFlat).border_color.is_equal_approx(Color(UIStyleRegistry.get_color(UIStyleRegistry.STYLE_DECADE_WOOD, "border"), 0.30)):
 		_fail("theme_refresh")
 		return
 	# 暖木家园主题的模式卡片目标选中底色；主题切换后应以新的棕色基底重新计算，而非保留旧样式。
@@ -708,7 +726,7 @@ func _run() -> void:
 	if not is_equal_approx(ai_response_slider.min_value, 0.10) or not is_equal_approx(ai_response_slider.max_value, 1.00) or not is_equal_approx(ai_response_slider.step, 0.05) or not is_equal_approx(game_speed_slider.min_value, 0.10) or not is_equal_approx(game_speed_slider.max_value, 1.00) or not is_equal_approx(game_speed_slider.step, 0.05):
 		_fail("main_menu_speed_slider_range")
 		return
-	if not (action_panel.get_theme_stylebox("panel") as StyleBoxFlat).border_color.is_equal_approx(UIStyleRegistry.get_color(UIStyleRegistry.STYLE_DECADE_WOOD, "accent")) or not (ai_response_slider.get_theme_stylebox("grabber_area") as StyleBoxFlat).border_color.is_equal_approx(UIStyleRegistry.get_color(UIStyleRegistry.STYLE_DECADE_WOOD, "accent")) or not (player_count_line_edit.get_theme_stylebox("normal") as StyleBoxFlat).border_color.is_equal_approx(UIStyleRegistry.get_color(UIStyleRegistry.STYLE_DECADE_WOOD, "border")):
+	if not (action_panel.get_theme_stylebox("panel") as StyleBoxFlat).border_color.is_equal_approx(Color.TRANSPARENT) or not (ai_response_slider.get_theme_stylebox("grabber_area") as StyleBoxFlat).border_color.is_equal_approx(Color(UIStyleRegistry.get_color(UIStyleRegistry.STYLE_DECADE_WOOD, "accent"), 0.30)) or not (player_count_line_edit.get_theme_stylebox("normal") as StyleBoxFlat).border_color.is_equal_approx(Color(UIStyleRegistry.get_color(UIStyleRegistry.STYLE_DECADE_WOOD, "border"), 0.48)):
 		_fail("settings_theme_refresh")
 		return
 	GameSettings.set_ui_style(UIStyleRegistry.DEFAULT_STYLE_ID)
@@ -967,3 +985,17 @@ func _is_failed_match_runtime_discarded(match_controller: MatchController) -> bo
 		and match_controller.event_scheduler.pause_registry.get_active_tokens().is_empty()
 		and match_controller.ai_coordinator._policies.is_empty()
 	)
+
+
+## 等待首屏按需加载完成；以任务状态为准，避免固定帧数依赖机器速度。
+func _wait_gallery_ready(panel: Control) -> bool:
+	# 最晚完成时间；30秒用于冷缓存导入，超时给出明确失败而不无限挂起。
+	var deadline: int = Time.get_ticks_msec() + 30000
+	await get_tree().process_frame
+	await get_tree().process_frame
+	while (panel.get("_view_loader") as Node).is_processing():
+		if Time.get_ticks_msec() > deadline:
+			_fail("gallery_load_timeout:%s" % panel.name)
+			return false
+		await get_tree().process_frame
+	return true

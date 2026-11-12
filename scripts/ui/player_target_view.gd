@@ -807,7 +807,7 @@ func _refresh_visual_state() -> void:
 		player_style.shadow_size = 4
 		player_style.shadow_offset = Vector2.ZERO
 	_card_body.add_theme_stylebox_override("panel", player_style)
-	_card_finish.configure(card_size, Rect2(_artwork_rect.position, _artwork_rect.size), border_color, background_color, BattleUIStyle.get_color("text_primary"), _artwork_rect.visible)
+	_card_finish.configure(card_size, Rect2(_artwork_rect.position, _artwork_rect.size), border_color, background_color, BattleUIStyle.on_dark(), _artwork_rect.visible)
 	_refresh_card_back_style()
 	_refresh_card_back_overlay()
 	# 快照存活状态；不能用输入权限替代，离场角色仍存活但应保持透明武将牌而非显示阵亡文字。
@@ -1098,7 +1098,7 @@ func _refresh_character_name_lines(character_name: String) -> void:
 	# 逐行绘制起点；整列高于竖条时从顶部开始，避免名字被裁掉上半部分。
 	var current_y: float = maxf((_character_name_label.size.y - total_height) * 0.5, 0.0)
 	# 文字配色；与其他覆盖层共用主题主文字色。
-	var name_color: Color = BattleUIStyle.get_color("text_primary")
+	var name_color: Color = BattleUIStyle.on_dark()
 	# 阴影参数；沿用容器 Label 的主题覆盖，保持与旧版竖排完全一致的描边观感。
 	var shadow_color: Color = _character_name_label.get_theme_color("font_shadow_color")
 	var shadow_offset_x: int = _character_name_label.get_theme_constant("shadow_offset_x")
@@ -1159,9 +1159,9 @@ func _refresh_decade_overlay(character_definition: Dictionary = {}) -> void:
 	_refresh_character_name_lines(character_name)
 	_identity_badge_label.text = identity_text
 	_hover_player_name_label.text = str(_player_snapshot.get("display_name", "玩家"))
-	_hover_player_name_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
+	_hover_player_name_label.add_theme_color_override("font_color", BattleUIStyle.on_dark())
 	_hand_count_label.text = str(int(_player_snapshot.get("hand_count", 0)))
-	_hand_count_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
+	_hand_count_label.add_theme_color_override("font_color", BattleUIStyle.on_dark())
 	_identity_badge_label.visible = _match_overlays_visible
 	_hand_count_label.visible = _match_overlays_visible
 	_refresh_auto_managed_label()
@@ -1185,7 +1185,7 @@ func _refresh_decade_overlay(character_definition: Dictionary = {}) -> void:
 	_public_zone_label.configure(judgment_names, bool(_player_snapshot.get("judgment_area_abolished", false)))
 	_public_zone_label.visible = _public_judgment_visible and _match_overlays_visible
 	_faction_badge_label.text = faction_short_name
-	_faction_badge_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
+	_faction_badge_label.add_theme_color_override("font_color", BattleUIStyle.on_dark())
 	_faction_badge_label.tooltip_text = ""
 	# 势力徽记样式；清空通用面板的大内边距，保证紧凑圆徽中的单字完整显示。
 	var faction_badge_style: StyleBoxFlat = BattleUIStyle.make_panel(faction_color.darkened(0.28), faction_color.lightened(0.36), 1, 14)
@@ -1249,7 +1249,7 @@ func _refresh_auto_managed_label() -> void:
 	var offline_managed: bool = bool(_player_snapshot.get("auto_managed_offline", false))
 	_auto_managed_label.text = "已离线，托管中" if offline_managed else "托管中"
 	_auto_managed_label.visible = _match_overlays_visible and auto_managed
-	_auto_managed_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
+	_auto_managed_label.add_theme_color_override("font_color", BattleUIStyle.on_dark())
 	_auto_managed_label.add_theme_color_override("font_outline_color", BattleUIStyle.get_color("outer_background"))
 
 

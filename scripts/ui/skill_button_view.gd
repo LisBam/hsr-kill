@@ -189,9 +189,13 @@ func _refresh_visual_state() -> void:
 		border_color = BattleUIStyle.get_color("accent")
 	# 技能描边宽度；选中时使用3像素，普通状态使用1像素。
 	var border_width: int = 3 if is_skill_selected else 1
-	add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary") if is_skill_available else disabled_font_color)
-	add_theme_color_override("font_hover_color", BattleUIStyle.get_color("button_hover_font") if is_skill_available else disabled_font_color)
-	add_theme_color_override("font_pressed_color", BattleUIStyle.get_color("button_pressed_font") if is_skill_available else disabled_font_color)
+	# 实际按钮底色决定前景亮度；限定技的深红底与纸金普通技能可以使用不同文字色。
+	var available_font_color: Color = BattleUIStyle.readable_ink(background_color)
+	if _is_limited_skill and not _is_limited_skill_used:
+		disabled_font_color = available_font_color
+	add_theme_color_override("font_color", available_font_color if is_skill_available else disabled_font_color)
+	add_theme_color_override("font_hover_color", available_font_color if is_skill_available else disabled_font_color)
+	add_theme_color_override("font_pressed_color", available_font_color if is_skill_available else disabled_font_color)
 	add_theme_color_override("font_disabled_color", disabled_font_color)
 	add_theme_stylebox_override("normal", BattleUIStyle.make_button(background_color, border_color, border_width, 9))
 	add_theme_stylebox_override("hover", BattleUIStyle.make_button(background_color.lightened(0.09), border_color.lightened(0.12), maxi(border_width, 2), 9) if is_skill_available else BattleUIStyle.make_button(background_color, border_color, border_width, 9))

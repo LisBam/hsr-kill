@@ -3,6 +3,11 @@ extends TextureRect
 
 ## 十周年风格牌桌背景组件。组件只绘制可缩放的桌面、木质包边与金色装饰，不读取对局状态，也不依赖参考扩展目录中的外部资源。
 
+## 纸面装饰环的相对半径；默认0.48倍高度，仅绘制角落纹样，不改变牌桌座位几何。
+const PAPER_ORBIT_RATIO: float = 0.48
+## 纸面几何纹样分段数；默认12，取正整数，决定罗盘刻度密度，运行时无需修改。
+const PAPER_ORBIT_SEGMENTS: int = 12
+
 ## 牌桌主体相对控件边缘的留白；默认18像素用于露出外层木质框，运行时无需动态修改。
 ## 活动主题可通过同名语义覆盖该几何值；崩铁风格使用34像素形成20像素中性深色外沿，暖木家园保持18像素。
 @export_range(0.0, 80.0, 1.0) var table_inset: float = 18.0
@@ -123,6 +128,9 @@ func _draw() -> void:
 	var backdrop_size: Vector2 = size
 	if backdrop_size.x <= 0.0 or backdrop_size.y <= 0.0:
 		return
+	if bool(UIStyleRegistry.get_value(BattleUIStyle.get_active_style_id(), "paper_theme", false)):
+		_draw_paper_table(backdrop_size)
+		return
 	_draw_vertical_background_gradient(backdrop_size)
 	# 外层木质框矩形；覆盖全屏并作为桌面主体的包边底色。
 	var outer_rect: Rect2 = Rect2(Vector2(table_inset - rail_width, table_inset - rail_width), backdrop_size - Vector2.ONE * (table_inset - rail_width) * 2.0)
@@ -236,3 +244,23 @@ func _make_rounded_box(background_color: Color, border_color: Color, border_widt
 	style.set_border_width_all(border_width)
 	style.set_corner_radius_all(roundi(maxf(corner_radius, 0.0)))
 	return style
+
+
+## 绘制纸金牌桌；环形纹样退到四角，桌面中央留给出牌、目标连线与结算提示。
+func _draw_paper_table(backdrop_size: Vector2) -> void:
+	# 客户区外框；深色边沿与首页保持一致，正文区使用完全不透明的浅色纸面。
+	var paper_rect: Rect2 = Rect2(Vector2.ONE * table_inset, backdrop_size - Vector2.ONE * table_inset * 2.0)
+	# 纹样颜色；低透明度保证不会与目标提示争夺视觉注意力。
+	var line_color: Color = Color(gold_color, ornament_opacity)
+	# 装饰圆半径；跟随高度变化，保持超宽窗口中纹样不被拉伸。
+	var radius: float = backdrop_size.y * PAPER_ORBIT_RATIO
+	draw_rect(Rect2(Vector2.ZERO, backdrop_size), outer_background_color)
+	draw_style_box(_make_rounded_box(table_surface_color, Color(gold_color, 0.35), 1, 18), paper_rect)
+	for corner: Vector2 in [Vector2(paper_rect.position.x, paper_rect.end.y), Vector2(paper_rect.end.x, paper_rect.position.y)]:
+		draw_arc(corner, radius, 0.0, TAU, 128, line_color, 1.0, true)
+		draw_arc(corner, radius * 0.86, 0.0, TAU, 128, line_color, 1.0, true)
+		draw_arc(corner, radius * 0.38, 0.0, TAU, 96, line_color, 1.0, true)
+		for index: int in range(PAPER_ORBIT_SEGMENTS):
+			# 刻度方向；使用确定性角度，不消费对局随机数。
+			var direction: Vector2 = Vector2.from_angle(TAU * float(index) / float(PAPER_ORBIT_SEGMENTS))
+			draw_line(corner + direction * radius * 0.38, corner + direction * radius, line_color, 1.0, true)

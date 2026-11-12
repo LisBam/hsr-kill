@@ -10,10 +10,10 @@ layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
-offset_left = 54.0
-offset_top = 104.0
-offset_right = -54.0
-offset_bottom = -38.0
+offset_left = 36.0
+offset_top = 118.0
+offset_right = -36.0
+offset_bottom = -28.0
 grow_horizontal = 2
 grow_vertical = 2
 script = ExtResource("1_online_settings")
@@ -39,30 +39,30 @@ anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 
-[node name="OnlineSettingsContent" type="HBoxContainer" parent="OnlineSettingsFrame"]
+[node name="OnlineSettingsContent" type="VBoxContainer" parent="OnlineSettingsFrame"]
 layout_mode = 2
 theme_override_constants/separation = 14
 
 [node name="OnlineSettingsSideList" type="PanelContainer" parent="OnlineSettingsFrame/OnlineSettingsContent"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(286, 0)
+custom_minimum_size = Vector2(0, 72)
 layout_mode = 2
 
-[node name="SideListVBox" type="VBoxContainer" parent="OnlineSettingsFrame/OnlineSettingsContent/OnlineSettingsSideList"]
+[node name="SideListVBox" type="HBoxContainer" parent="OnlineSettingsFrame/OnlineSettingsContent/OnlineSettingsSideList"]
 layout_mode = 2
 theme_override_constants/separation = 12
 
 [node name="OnlineSettingsSideListTitle" type="Label" parent="OnlineSettingsFrame/OnlineSettingsContent/OnlineSettingsSideList/SideListVBox"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 48)
+custom_minimum_size = Vector2(224, 0)
 layout_mode = 2
-theme_override_font_sizes/font_size = 19
+theme_override_font_sizes/font_size = 26
 text = "联机设置"
 vertical_alignment = 1
 
 [node name="OnlineProfileSectionButton" type="Button" parent="OnlineSettingsFrame/OnlineSettingsContent/OnlineSettingsSideList/SideListVBox"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 100)
+custom_minimum_size = Vector2(280, 64)
 layout_mode = 2
 mouse_default_cursor_shape = 2
 toggle_mode = true
@@ -75,9 +75,9 @@ anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
 offset_left = 20.0
-offset_top = 14.0
+offset_top = 6.0
 offset_right = -14.0
-offset_bottom = -14.0
+offset_bottom = -6.0
 grow_horizontal = 2
 grow_vertical = 2
 mouse_filter = 2
@@ -86,13 +86,13 @@ theme_override_constants/separation = 2
 [node name="OnlineProfileSectionName" type="Label" parent="OnlineSettingsFrame/OnlineSettingsContent/OnlineSettingsSideList/SideListVBox/OnlineProfileSectionButton/OnlineProfileSectionContent"]
 unique_name_in_owner = true
 layout_mode = 2
-theme_override_font_sizes/font_size = 27
+theme_override_font_sizes/font_size = 21
 text = "联机资料"
 
 [node name="OnlineProfileSectionHint" type="Label" parent="OnlineSettingsFrame/OnlineSettingsContent/OnlineSettingsSideList/SideListVBox/OnlineProfileSectionButton/OnlineProfileSectionContent"]
 unique_name_in_owner = true
 layout_mode = 2
-theme_override_font_sizes/font_size = 16
+theme_override_font_sizes/font_size = 13
 text = "名称与形象"
 
 [node name="OnlineProfileSectionIndicator" type="ColorRect" parent="OnlineSettingsFrame/OnlineSettingsContent/OnlineSettingsSideList/SideListVBox/OnlineProfileSectionButton"]
@@ -109,6 +109,7 @@ color = Color(0.831373, 0.709804, 0.372549, 1)
 unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
+size_flags_vertical = 3
 
 [node name="OnlineSettingsDetailContent" type="Control" parent="OnlineSettingsFrame/OnlineSettingsContent/OnlineSettingsDetailPanel"]
 unique_name_in_owner = true

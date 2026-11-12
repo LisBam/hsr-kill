@@ -3,10 +3,11 @@ extends RefCounted
 ## 武将牌表面材质工厂；只细化调用方传入的样式，不读取快照、主题单例或场景节点。
 ## 原样保留内容边距和信息几何，调用方继续拥有身份、势力及残血颜色的语义。
 
+## 纸金卡框使用主框6像素/0.24透明度、小徽记0.20透明度柔影，减轻浅色桌面上的黑晕。
 ## 小型信息面的阴影半径；默认3像素避免窄牌面上的多层阴影糊成黑块。
 const BADGE_SHADOW_SIZE: int = 3
 ## 主牌框的阴影半径；默认8像素形成清晰悬浮边缘，不扩大输入区域。
-const BODY_SHADOW_SIZE: int = 8
+const BODY_SHADOW_SIZE: int = 6
 ## 姓名底色的压暗比例；默认0.42形成深色珐琅，保留不同势力的色相。
 const NAME_DARKENING: float = 0.42
 ## 普通角标的描边收敛比例；默认0.24降低信息框与目标选择边框的视觉竞争。
@@ -14,11 +15,11 @@ const BADGE_BORDER_BLEND: float = 0.24
 ## 小型信息面的圆角；默认5像素，身份和手牌数继续使用原有矩形范围。
 const BADGE_RADIUS: int = 5
 ## 信息面阴影透明度；默认0.38，在原画上仍保持清晰边界。
-const BADGE_SHADOW_ALPHA: float = 0.38
+const BADGE_SHADOW_ALPHA: float = 0.20
 ## 信息面阴影下移；默认2像素，减少徽记周围的均匀黑晕。
 const BADGE_SHADOW_OFFSET: float = 2.0
 ## 主框阴影透明度；默认0.54，维持武将牌与桌面的分离。
-const BODY_SHADOW_ALPHA: float = 0.54
+const BODY_SHADOW_ALPHA: float = 0.24
 ## 主框阴影下移；默认3像素，保留统一光照方向。
 const BODY_SHADOW_OFFSET: float = 3.0
 ## 姓名条左侧强调线宽；默认2像素强化竖向阅读轴。

@@ -22,7 +22,8 @@ const GALLERY_LOADING_COVER_SCRIPT: Script = preload("res://scripts/ui/gallery_l
 const GALLERY_VIEW_LOADER_SCRIPT: Script = preload("res://scripts/ui/gallery_view_loader.gd")
 
 ## 每行显示的武将牌数量；默认5张可在右侧详情区内保留舒适间距，运行时一般无需动态修改。
-@export_range(1, 8, 1) var avatar_columns: int = 5
+## 全宽陈列区默认7列；保持0.72倍正式武将牌，宽度变更应同步确认触摸区域与横向边距。
+@export_range(1, 8, 1) var avatar_columns: int = 7
 
 ## 联机形象武将牌的显示比例；默认0.72可同时展示两行候选，运行时只影响资料面板布局。
 @export_range(0.5, 1.0, 0.01) var avatar_card_scale: float = 0.72
@@ -409,7 +410,7 @@ func _apply_line_edit_style(line_edit: LineEdit) -> void:
 
 ## 创建与主菜单外框一致的内嵌面板；保留主题阴影，保证联机设置页与模式选择页外框观感统一。
 func _make_frame_panel() -> StyleBoxFlat:
-	return MENU_STYLE.make_inset_panel(BattleUIStyle.get_color("rail"), BattleUIStyle.get_color("border"), 2, 8)
+	return MENU_STYLE.make_inset_panel(Color.TRANSPARENT, Color.TRANSPARENT, 0, 0)
 
 
 ## 创建没有重复阴影的内层面板；外框保留唯一强阴影，内部只用细边区分内容层级。

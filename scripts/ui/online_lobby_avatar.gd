@@ -184,7 +184,8 @@ func refresh_ui_style() -> void:
 	if not is_node_ready():
 		return
 	_name_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary") if _occupied else BattleUIStyle.get_color("text_muted"))
-	_name_label.add_theme_color_override("font_outline_color", BattleUIStyle.get_color("outer_background"))
+	_name_label.add_theme_color_override("font_outline_color", Color.TRANSPARENT)
+	_name_label.add_theme_constant_override("outline_size", 0)
 	_empty_slot_button.add_theme_stylebox_override("normal", _make_slot_frame_style())
 	_empty_slot_button.add_theme_stylebox_override("hover", MENU_STYLE.make_panel(Color(BattleUIStyle.get_color("action_button"), 0.58), BattleUIStyle.get_color("accent"), 2, 6))
 	_empty_slot_button.add_theme_stylebox_override("pressed", MENU_STYLE.make_panel(Color(BattleUIStyle.get_color("action_button"), 0.78), BattleUIStyle.get_color("accent"), 2, 6))

@@ -37,7 +37,8 @@ func refresh_style() -> void:
 		return
 	# 当前材质；只在初始化后使用。
 	var ambient_material: ShaderMaterial = material as ShaderMaterial
-	ambient_material.set_shader_parameter("base_color", BattleUIStyle.get_color("outer_background"))
+	ambient_material.set_shader_parameter("base_color", BattleUIStyle.get_color("table_surface"))
+	ambient_material.set_shader_parameter("paper_theme", bool(UIStyleRegistry.get_value(BattleUIStyle.get_active_style_id(), "paper_theme", false)))
 	ambient_material.set_shader_parameter("accent_color", BattleUIStyle.get_color("accent"))
 	ambient_material.set_shader_parameter("strength", strength)
 	ambient_material.set_shader_parameter("drift_speed", drift_speed)

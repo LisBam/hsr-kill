@@ -121,7 +121,7 @@ func refresh_ui_style() -> void:
 	frame_style.shadow_offset = Vector2(0.0, 6.0)
 	_frame.add_theme_stylebox_override("panel", frame_style)
 	_title_label.add_theme_color_override("font_color", BattleUIStyle.get_color("tech_accent"))
-	_subtitle_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	_subtitle_label.add_theme_color_override("font_color", BattleUIStyle.get_color("on_dark_muted", Color("c2b8a5")))
 	if _compose_view != null:
 		_compose_view.refresh_ui_style()
 	if _mint_view != null:

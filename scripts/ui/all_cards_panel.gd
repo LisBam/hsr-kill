@@ -117,6 +117,8 @@ const EXCLUSIVE_CARD_TAG_NAME: String = "专属"
 ## 武将详情右侧技能名称颜色；默认使用稳定暖黄色确保在两套主题中都与说明正文形成清晰层级，运行时只影响文字表现。
 @export var information_skill_name_color: Color = Color("f4cf66")
 
+## 纸金主题的技能标题使用text_guide深金以保持纸面可读性；上述颜色保留为深色主题的可配置标题色。
+
 ## 图鉴外框；左侧三个子分页与右侧搜索网格共同位于此容器内。
 @onready var _frame: PanelContainer = %AllCardsFrame
 
@@ -124,7 +126,7 @@ const EXCLUSIVE_CARD_TAG_NAME: String = "专属"
 @onready var _side_list: PanelContainer = %AllCardsSideList
 
 ## 图鉴左右分栏容器；网格宽度从该稳定客户区扣除侧栏与间距计算，避免滚动内容反向撑大页面。
-@onready var _content: HBoxContainer = _side_list.get_parent() as HBoxContainer
+@onready var _content: BoxContainer = _side_list.get_parent() as BoxContainer
 
 ## 图鉴右侧内容面板；承载搜索栏、结果数量、滚动网格和空结果提示。
 @onready var _detail_panel: PanelContainer = %AllCardsDetailPanel
@@ -303,7 +305,7 @@ func open_panel() -> void:
 func refresh_ui_style() -> void:
 	if not is_node_ready():
 		return
-	_frame.add_theme_stylebox_override("panel", MENU_STYLE.make_inset_panel(BattleUIStyle.get_color("rail"), BattleUIStyle.get_color("border"), 2, 8))
+	_frame.add_theme_stylebox_override("panel", MENU_STYLE.make_inset_panel(Color.TRANSPARENT, Color.TRANSPARENT, 0, 0))
 	_side_list.add_theme_stylebox_override("panel", _make_flat_inner_panel(BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border")))
 	_detail_panel.add_theme_stylebox_override("panel", _make_flat_inner_panel(BattleUIStyle.get_color("metal_panel"), BattleUIStyle.get_color("border")))
 	_detail_surface.color = BattleUIStyle.get_color("table_surface")
@@ -335,7 +337,7 @@ func refresh_ui_style() -> void:
 	_information_character_skill_list.add_theme_constant_override("separation", information_skill_separation)
 	for skill_name_label: Label in _information_skill_name_labels:
 		if skill_name_label != null and is_instance_valid(skill_name_label):
-			skill_name_label.add_theme_color_override("font_color", information_skill_name_color)
+			skill_name_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_guide") if bool(UIStyleRegistry.get_value(BattleUIStyle.get_active_style_id(), "paper_theme", false)) else information_skill_name_color)
 	for skill_description_label: SkillDescriptionView in _information_skill_description_labels:
 		if skill_description_label != null and is_instance_valid(skill_description_label):
 			skill_description_label.refresh_ui_style()
@@ -617,7 +619,7 @@ func _apply_filter_and_layout() -> void:
 	var item_size: Vector2 = visible_entries[0].get("size", Vector2.ZERO)
 	# 当前可用网格宽度；最少保留一张牌宽度，窄窗口会通过单列继续完整浏览。
 	var available_width: float = maxf(
-		_content.size.x - _side_list.size.x - _content.get_theme_constant("separation") - 44.0 - gallery_scroll_bar_clearance,
+		_grid_scroll.size.x - gallery_scroll_bar_clearance,
 		item_size.x
 	)
 	# 当前列数；以缩放后牌宽和导出间距动态计算，不硬编码桌面或移动端列数。
@@ -798,7 +800,7 @@ func _show_character_information(character_id: String) -> void:
 		var skill_name_label: Label = Label.new()
 		skill_name_label.text = "【%s】" % str(skill_definition.get("name", skill_id))
 		skill_name_label.add_theme_font_size_override("font_size", 18)
-		skill_name_label.add_theme_color_override("font_color", information_skill_name_color)
+		skill_name_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_guide") if bool(UIStyleRegistry.get_value(BattleUIStyle.get_active_style_id(), "paper_theme", false)) else information_skill_name_color)
 		skill_name_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		skill_entry.add_child(skill_name_label)
 		_information_skill_name_labels.append(skill_name_label)

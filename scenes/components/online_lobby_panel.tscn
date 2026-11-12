@@ -32,9 +32,9 @@ anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
 offset_left = 24.0
-offset_top = 18.0
+offset_top = 20.0
 offset_right = -24.0
-offset_bottom = -18.0
+offset_bottom = -20.0
 grow_horizontal = 2
 grow_vertical = 2
 
@@ -64,18 +64,18 @@ vertical_alignment = 1
 unique_name_in_owner = true
 layout_mode = 0
 offset_left = 24.0
-offset_top = 54.0
-offset_right = 1208.0
-offset_bottom = 528.0
+offset_top = 56.0
+offset_right = 954.0
+offset_bottom = 530.0
 mouse_filter = 2
 
 [node name="OnlineLobbyChatPanel" type="PanelContainer" parent="OnlineLobbySurface"]
 unique_name_in_owner = true
 layout_mode = 0
 offset_left = 24.0
-offset_top = 532.0
-offset_right = 790.0
-offset_bottom = 674.0
+offset_top = 550.0
+offset_right = 1208.0
+offset_bottom = 660.0
 
 [node name="ChatMargin" type="MarginContainer" parent="OnlineLobbySurface/OnlineLobbyChatPanel"]
 layout_mode = 2
@@ -124,10 +124,10 @@ text = "发送"
 [node name="OnlineLobbyControlPanel" type="PanelContainer" parent="OnlineLobbySurface"]
 unique_name_in_owner = true
 layout_mode = 0
-offset_left = 804.0
-offset_top = 532.0
+offset_left = 978.0
+offset_top = 88.0
 offset_right = 1208.0
-offset_bottom = 674.0
+offset_bottom = 520.0
 
 [node name="ControlMargin" type="MarginContainer" parent="OnlineLobbySurface/OnlineLobbyControlPanel"]
 layout_mode = 2
@@ -138,7 +138,8 @@ theme_override_constants/margin_bottom = 6
 
 [node name="ControlVBox" type="VBoxContainer" parent="OnlineLobbySurface/OnlineLobbyControlPanel/ControlMargin"]
 layout_mode = 2
-theme_override_constants/separation = 5
+theme_override_constants/separation = 24
+alignment = 1
 
 [node name="OnlineLobbyRoomSummary" type="Label" parent="OnlineLobbySurface/OnlineLobbyControlPanel/ControlMargin/ControlVBox"]
 unique_name_in_owner = true
@@ -146,6 +147,8 @@ layout_mode = 2
 text = "真人：1  ｜  对局人数：2  ｜  房间密码：未设置"
 horizontal_alignment = 1
 autowrap_mode = 2
+theme_override_font_sizes/font_size = 18
+theme_override_constants/line_spacing = 8
 
 [node name="OnlineLobbyErrorLabel" type="Label" parent="OnlineLobbySurface/OnlineLobbyControlPanel/ControlMargin/ControlVBox"]
 unique_name_in_owner = true
@@ -154,28 +157,28 @@ layout_mode = 2
 horizontal_alignment = 1
 autowrap_mode = 2
 
-[node name="ControlButtons" type="HBoxContainer" parent="OnlineLobbySurface/OnlineLobbyControlPanel/ControlMargin/ControlVBox"]
+[node name="ControlButtons" type="VBoxContainer" parent="OnlineLobbySurface/OnlineLobbyControlPanel/ControlMargin/ControlVBox"]
 layout_mode = 2
-theme_override_constants/separation = 8
+theme_override_constants/separation = 14
 alignment = 1
 
 [node name="OnlineLobbySettingsButton" type="Button" parent="OnlineLobbySurface/OnlineLobbyControlPanel/ControlMargin/ControlVBox/ControlButtons"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(112, 38)
+custom_minimum_size = Vector2(0, 46)
 layout_mode = 2
 mouse_default_cursor_shape = 2
 text = "对局设置"
 
 [node name="OnlineLobbyStartButton" type="Button" parent="OnlineLobbySurface/OnlineLobbyControlPanel/ControlMargin/ControlVBox/ControlButtons"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(112, 38)
+custom_minimum_size = Vector2(0, 46)
 layout_mode = 2
 mouse_default_cursor_shape = 2
 text = "开始游戏"
 
 [node name="OnlineLobbyLeaveButton" type="Button" parent="OnlineLobbySurface/OnlineLobbyControlPanel/ControlMargin/ControlVBox"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 36)
+custom_minimum_size = Vector2(0, 46)
 layout_mode = 2
 mouse_default_cursor_shape = 2
 text = "离开房间"

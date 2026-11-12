@@ -19,7 +19,7 @@ anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 mouse_filter = 2
-color = Color(0.047, 0.055, 0.075, 1)
+color = Color(0.906, 0.898, 0.882, 1)
 
 [node name="Center" type="CenterContainer" parent="."]
 layout_mode = 1
@@ -36,15 +36,15 @@ theme_override_constants/separation = 18
 
 [node name="Title" type="Label" parent="Center/Content"]
 layout_mode = 2
-theme_override_colors/font_color = Color(0.91, 0.77, 0.48, 1)
+theme_override_colors/font_color = Color(0.16, 0.15, 0.14, 1)
 theme_override_font_sizes/font_size = 36
-text = "HSR Kill"
+text = "崩铁杀  /  HSR KILL"
 horizontal_alignment = 1
 
 [node name="BootStatus" type="Label" parent="Center/Content"]
 unique_name_in_owner = true
 layout_mode = 2
-theme_override_colors/font_color = Color(0.72, 0.75, 0.82, 1)
+theme_override_colors/font_color = Color(0.38, 0.36, 0.33, 1)
 text = "正在准备游戏…"
 horizontal_alignment = 1
 

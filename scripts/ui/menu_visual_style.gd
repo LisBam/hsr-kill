@@ -11,21 +11,23 @@ const PANEL_BORDER_OPACITY: float = 0.30
 ## 普通按钮描边透明度；0至1，默认0.48区分按钮与不可点击的内容面板。
 const BUTTON_BORDER_OPACITY: float = 0.48
 ## 局外面板圆角下限；默认12逻辑像素，按钮使用独立的10像素圆角。
-const PANEL_RADIUS: int = 12
+## 纸金材质参数以下方常量为准：面板8像素、按钮6像素、柔影10像素。
+const PANEL_RADIUS: int = 8
 ## 按钮圆角；默认10逻辑像素，所有按钮状态保持相同几何以避免抖动。
-const BUTTON_RADIUS: int = 10
+const BUTTON_RADIUS: int = 6
 ## 外框阴影半径；默认18逻辑像素，仅外层保留阴影，内层可沿用调用方的去阴影策略。
-const PANEL_SHADOW_SIZE: int = 18
+const PANEL_SHADOW_SIZE: int = 10
 
 
+## 纸金材质采用8像素面板圆角、6像素按钮圆角与10像素柔影；检查器和布局边距不受材质参数影响。
 ## 创建局外内容面板；参数与通用工厂一致，保持既有布局边距及背景透明度。
 static func make_panel(background_color: Color = UNSET_COLOR, border_color: Color = UNSET_COLOR, border_width: int = 1, corner_radius: int = 10) -> StyleBoxFlat:
 	# 独立样式副本；不修改战斗控件持有的资源。
 	var style: StyleBoxFlat = BattleUIStyle.make_panel(background_color, border_color, mini(border_width, 1), maxi(corner_radius, PANEL_RADIUS))
 	style.border_color.a *= PANEL_BORDER_OPACITY
-	style.shadow_color = Color(0.0, 0.0, 0.0, 0.32)
-	style.shadow_size = PANEL_SHADOW_SIZE
-	style.shadow_offset = Vector2(0.0, 6.0)
+	style.shadow_color = Color(0.12, 0.10, 0.07, 0.16)
+	style.shadow_size = PANEL_SHADOW_SIZE if style.bg_color.a > 0.0 else 0
+	style.shadow_offset = Vector2(0.0, 4.0)
 	style.anti_aliasing = true
 	return style
 
@@ -79,10 +81,10 @@ static func apply_interaction_button(button: Button, background_color: Color = U
 	button.add_theme_stylebox_override("focus", focus_style)
 	button.add_theme_stylebox_override("disabled", make_decade_button(BattleUIStyle.get_color("disabled_button"), BattleUIStyle.get_color("disabled_button_border")))
 	# 主要按钮使用深字以保持金色实底上的对比度，普通按钮使用主题文字语义。
-	var text_color: Color = BattleUIStyle.get_color("outer_background") if is_primary else BattleUIStyle.get_color("button_font")
+	var text_color: Color = BattleUIStyle.readable_ink(background)
 	button.add_theme_color_override("font_color", text_color)
-	button.add_theme_color_override("font_hover_color", text_color if is_primary else BattleUIStyle.get_color("button_hover_font"))
-	button.add_theme_color_override("font_pressed_color", text_color if is_primary else BattleUIStyle.get_color("button_pressed_font"))
+	button.add_theme_color_override("font_hover_color", text_color)
+	button.add_theme_color_override("font_pressed_color", text_color)
 	button.add_theme_color_override("font_hover_pressed_color", text_color)
 	button.add_theme_color_override("font_focus_color", text_color)
 	button.add_theme_color_override("font_disabled_color", BattleUIStyle.get_color("disabled_button_font"))

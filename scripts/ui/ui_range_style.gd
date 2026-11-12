@@ -34,6 +34,10 @@ static func apply(control: Control) -> void:
 			var style: StyleBoxFlat = _track(color)
 			for side: int in [SIDE_LEFT, SIDE_TOP, SIDE_RIGHT, SIDE_BOTTOM]:
 				style.set_content_margin(side, original.get_content_margin(side))
+			if control is HScrollBar:
+				# 横向模式轨道两端不保留原生拖块内边距，确保首尾卡片可完整到达视口边缘。
+				style.content_margin_left = 0.0
+				style.content_margin_right = 0.0
 			control.add_theme_stylebox_override(state, style)
 	control.end_bulk_theme_override()
 

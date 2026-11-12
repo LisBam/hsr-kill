@@ -174,20 +174,20 @@ func _run() -> void:
 	# 程序化背景组件；黑白太空风格不再绘制导航网格，只保留星点、轨道和远景剪影。
 	# 崩铁风格关闭旧星点、山脊和建筑剪影，仅保留暖白桌面上的低透明度金色轨道纹样。
 	var reference_backdrop: ReferenceBackdrop = main_instance.get_node("ReferenceBackdrop") as ReferenceBackdrop
-	if GameSettings.ui_style_id != UIStyleRegistry.DEFAULT_STYLE_ID or ui_style_option.item_count != 3 or ui_style_option.get_item_text(0) != "崩铁风格" or ui_style_option.get_item_text(1) != "暖木家园" or ui_style_option.get_item_text(2) != "高级黑金" or str(ui_style_option.get_item_metadata(2)) != UIStyleRegistry.STYLE_PREMIUM_BLACK_GOLD or str(ui_style_option.get_item_metadata(ui_style_option.selected)) != UIStyleRegistry.STYLE_SPACE_MONO or not (top_info_panel.get_theme_stylebox("panel") as StyleBoxFlat).border_color.is_equal_approx(UIStyleRegistry.get_color(UIStyleRegistry.STYLE_SPACE_MONO, "border")) or not is_zero_approx(backdrop_shade.color.a) or bool(reference_backdrop.get("_uses_space_grid")) or bool(reference_backdrop.get("_uses_starfield")) or bool(reference_backdrop.get("_uses_scenery")) or not is_equal_approx(reference_backdrop.table_inset, 34.0) or not is_equal_approx(reference_backdrop.rail_width, 14.0):
+	if GameSettings.ui_style_id != UIStyleRegistry.DEFAULT_STYLE_ID or ui_style_option.item_count != 3 or ui_style_option.get_item_text(0) != "星穹 · 纸金" or ui_style_option.get_item_text(1) != "暖木家园" or ui_style_option.get_item_text(2) != "高级黑金" or str(ui_style_option.get_item_metadata(2)) != UIStyleRegistry.STYLE_PREMIUM_BLACK_GOLD or str(ui_style_option.get_item_metadata(ui_style_option.selected)) != UIStyleRegistry.STYLE_SPACE_MONO or not (top_info_panel.get_theme_stylebox("panel") as StyleBoxFlat).border_color.is_equal_approx(Color(UIStyleRegistry.get_color(UIStyleRegistry.STYLE_SPACE_MONO, "border"), 0.42)) or not is_zero_approx(backdrop_shade.color.a) or bool(reference_backdrop.get("_uses_space_grid")) or bool(reference_backdrop.get("_uses_starfield")) or bool(reference_backdrop.get("_uses_scenery")) or not is_equal_approx(reference_backdrop.table_inset, 14.0) or not is_equal_approx(reference_backdrop.rail_width, 6.0):
 		_fail("default_ui_style:%s/%d/%d" % [GameSettings.ui_style_id, ui_style_option.item_count, ui_style_option.selected])
 		return
 	# 黑白太空主题的主要界面语义键；这些颜色必须保持无色相黑白灰，玩法语义色由独立键保留。
 	# 旧版纯黑白断言已由崩铁风格的分层配色断言替代；主题必须同时具备中性深色外底、雾面深灰内容区、黑框与金色强调。
 	# 崩铁风格核心颜色期望；固定值用于阻止主题被误改回单色滤镜或失去参考图的视觉层级。
 	var expected_style_colors: Dictionary = {
-		"outer_background": Color("111214"),
-		"outer_background_secondary": Color("111214"),
-		"table_surface": Color("24262b"),
-		"table_inner": Color("30333a"),
-		"rail": Color("1d1d1d"),
-		"border": Color("bfa86c"),
-		"accent": Color("d4b55f"),
+		"outer_background": Color("252525"),
+		"outer_background_secondary": Color("252525"),
+		"table_surface": Color("e7e5e1"),
+		"table_inner": Color("e7e5e1"),
+		"rail": Color("282725"),
+		"border": Color("b9a47d"),
+		"accent": Color("d5b67a"),
 	}
 	for primary_key: String in expected_style_colors:
 		# 当前主要界面颜色；必须与参考图抽象出的主题语义色一致。
@@ -203,7 +203,7 @@ func _run() -> void:
 	var card_name_popup_hover_style: StyleBoxFlat = card_name_option.get_popup().get_theme_stylebox("hover") as StyleBoxFlat
 	# UI风格弹出列表悬停样式；切换主题后由同一入口即时重绘。
 	var ui_style_popup_hover_style: StyleBoxFlat = ui_style_option.get_popup().get_theme_stylebox("hover") as StyleBoxFlat
-	if card_name_hover_style == null or ui_style_hover_style == null or card_name_popup_hover_style == null or ui_style_popup_hover_style == null or not card_name_hover_style.bg_color.is_equal_approx(BattleUIStyle.get_color("action_button")) or not ui_style_hover_style.border_color.is_equal_approx(BattleUIStyle.get_color("accent")) or not card_name_popup_hover_style.bg_color.is_equal_approx(BattleUIStyle.get_color("action_button")) or not ui_style_popup_hover_style.border_color.is_equal_approx(BattleUIStyle.get_color("accent")):
+	if card_name_hover_style == null or ui_style_hover_style == null or card_name_popup_hover_style == null or ui_style_popup_hover_style == null or not card_name_hover_style.bg_color.is_equal_approx(BattleUIStyle.get_color("action_button")) or not ui_style_hover_style.border_color.is_equal_approx(Color(BattleUIStyle.get_color("accent"), 0.48)) or not card_name_popup_hover_style.bg_color.is_equal_approx(BattleUIStyle.get_color("action_button")) or not ui_style_popup_hover_style.border_color.is_equal_approx(Color(BattleUIStyle.get_color("accent"), 0.48)):
 		_fail("match_menu_option_hover_style")
 		return
 	# 切换主题前的固定局内文案；高级黑金只允许替换视觉，不得改写菜单、牌桌信息或操作按钮文本。
@@ -234,12 +234,12 @@ func _run() -> void:
 		"use":(main_instance.get_node("%UseButton") as Button).text,
 		"cancel":(main_instance.get_node("%CancelButton") as Button).text,
 	}
-	if str(ui_style_option.get_item_metadata(ui_style_option.selected)) != UIStyleRegistry.STYLE_PREMIUM_BLACK_GOLD or not (top_info_panel.get_theme_stylebox("panel") as StyleBoxFlat).border_color.is_equal_approx(UIStyleRegistry.get_color(UIStyleRegistry.STYLE_PREMIUM_BLACK_GOLD, "border")) or not backdrop_shade.color.is_equal_approx(UIStyleRegistry.get_color(UIStyleRegistry.STYLE_PREMIUM_BLACK_GOLD, "backdrop_shade")) or bool(reference_backdrop.get("_uses_space_grid")) or bool(reference_backdrop.get("_uses_starfield")) or bool(reference_backdrop.get("_uses_scenery")) or not is_equal_approx(reference_backdrop.table_inset, 20.0) or not is_equal_approx(reference_backdrop.rail_width, 8.0) or not is_equal_approx(reference_backdrop.table_corner_radius, 16.0) or not is_equal_approx(reference_backdrop.center_ornament_radius, 176.0) or not is_equal_approx(reference_backdrop.ornament_opacity, 0.09) or premium_opportunity_style == null or not premium_opportunity_style.border_color.is_equal_approx(UIStyleRegistry.get_color(UIStyleRegistry.STYLE_PREMIUM_BLACK_GOLD, "accent")) or refreshed_battle_texts != preserved_battle_texts:
+	if str(ui_style_option.get_item_metadata(ui_style_option.selected)) != UIStyleRegistry.STYLE_PREMIUM_BLACK_GOLD or not (top_info_panel.get_theme_stylebox("panel") as StyleBoxFlat).border_color.is_equal_approx(Color(UIStyleRegistry.get_color(UIStyleRegistry.STYLE_PREMIUM_BLACK_GOLD, "border"), 0.42)) or not backdrop_shade.color.is_equal_approx(UIStyleRegistry.get_color(UIStyleRegistry.STYLE_PREMIUM_BLACK_GOLD, "backdrop_shade")) or bool(reference_backdrop.get("_uses_space_grid")) or bool(reference_backdrop.get("_uses_starfield")) or bool(reference_backdrop.get("_uses_scenery")) or not is_equal_approx(reference_backdrop.table_inset, 20.0) or not is_equal_approx(reference_backdrop.rail_width, 8.0) or not is_equal_approx(reference_backdrop.table_corner_radius, 16.0) or not is_equal_approx(reference_backdrop.center_ornament_radius, 176.0) or not is_equal_approx(reference_backdrop.ornament_opacity, 0.09) or premium_opportunity_style == null or not premium_opportunity_style.border_color.is_equal_approx(Color(UIStyleRegistry.get_color(UIStyleRegistry.STYLE_PREMIUM_BLACK_GOLD, "accent"), 0.42)) or refreshed_battle_texts != preserved_battle_texts:
 		_fail("ui_style_switch_to_premium_black_gold")
 		return
 	GameSettings.set_ui_style(UIStyleRegistry.STYLE_DECADE_WOOD)
 	await get_tree().process_frame
-	if str(ui_style_option.get_item_metadata(ui_style_option.selected)) != UIStyleRegistry.STYLE_DECADE_WOOD or not (top_info_panel.get_theme_stylebox("panel") as StyleBoxFlat).border_color.is_equal_approx(UIStyleRegistry.get_color(UIStyleRegistry.STYLE_DECADE_WOOD, "border")) or is_zero_approx(backdrop_shade.color.a) or bool(reference_backdrop.get("_uses_space_grid")) or not is_equal_approx(reference_backdrop.table_inset, 18.0) or not is_equal_approx(reference_backdrop.rail_width, 14.0):
+	if str(ui_style_option.get_item_metadata(ui_style_option.selected)) != UIStyleRegistry.STYLE_DECADE_WOOD or not (top_info_panel.get_theme_stylebox("panel") as StyleBoxFlat).border_color.is_equal_approx(Color(UIStyleRegistry.get_color(UIStyleRegistry.STYLE_DECADE_WOOD, "border"), 0.42)) or is_zero_approx(backdrop_shade.color.a) or bool(reference_backdrop.get("_uses_space_grid")) or not is_equal_approx(reference_backdrop.table_inset, 18.0) or not is_equal_approx(reference_backdrop.rail_width, 14.0):
 		_fail("ui_style_switch_to_wood")
 		return
 	GameSettings.set_ui_style(UIStyleRegistry.STYLE_SPACE_MONO)
@@ -293,7 +293,7 @@ func _run() -> void:
 	var confirm_disabled_style: StyleBoxFlat = confirm_button.get_theme_stylebox("disabled") as StyleBoxFlat
 	# 确定按钮普通样式；用于验证禁用状态具有明确亮度差。
 	var confirm_normal_style: StyleBoxFlat = confirm_button.get_theme_stylebox("normal") as StyleBoxFlat
-	if interaction_panel.visible or not (interaction_panel.get_theme_stylebox("panel") is StyleBoxEmpty) or not confirm_button.custom_minimum_size.is_equal_approx(cancel_button.custom_minimum_size) or action_row.get_theme_constant("separation") != 28 or not end_play_button.custom_minimum_size.is_equal_approx(Vector2(112.0, 36.0)) or end_play_button.text != "结束阶段" or end_play_button.custom_minimum_size.x >= cancel_button.custom_minimum_size.x or cancel_button.get_global_rect().intersects(end_play_button.get_global_rect()) or not end_play_normal_style.bg_color.is_equal_approx(BattleUIStyle.get_color("end_play_button")) or confirm_normal_style.bg_color.get_luminance() - confirm_disabled_style.bg_color.get_luminance() < 0.1 or end_play_button.get_parent() != main_instance or end_play_button.visible or recast_button.visible:
+	if interaction_panel.visible or not (interaction_panel.get_theme_stylebox("panel") is StyleBoxEmpty) or not confirm_button.custom_minimum_size.is_equal_approx(cancel_button.custom_minimum_size) or action_row.get_theme_constant("separation") != 28 or not end_play_button.custom_minimum_size.is_equal_approx(Vector2(112.0, 36.0)) or end_play_button.text != "结束阶段" or end_play_button.custom_minimum_size.x >= cancel_button.custom_minimum_size.x or cancel_button.get_global_rect().intersects(end_play_button.get_global_rect()) or not end_play_normal_style.bg_color.is_equal_approx(BattleUIStyle.get_color("end_play_border")) or absf(confirm_normal_style.bg_color.get_luminance() - confirm_disabled_style.bg_color.get_luminance()) < 0.05 or end_play_button.get_parent() != main_instance or end_play_button.visible or recast_button.visible:
 		_fail("interaction_controls panel=%s end_parent=%s" % [interaction_panel.visible, end_play_button.get_parent().name])
 		return
 	# 手牌栏继续保留175像素抬升空间；装备栏只等于148像素牌面高度，二者底边对齐且横向边界精确相接。
@@ -657,7 +657,7 @@ func _run() -> void:
 	var hovered_character_title_label: Label = information_box.get("_hover_title_label") as Label
 	# 武将悬停结构化技能名标签；测试武将只有一个技能，应只创建一个金色技能名标签。
 	var hovered_character_skill_name_labels: Array = information_box.get("_hover_skill_name_labels") as Array
-	if hovered_character_title_label == null or hovered_character_title_label.get_theme_color("font_color") != BattleUIStyle.get_color("accent") or hovered_character_skill_name_labels.size() != 1 or (hovered_character_skill_name_labels[0] as Label).get_theme_color("font_color") != BattleUIStyle.get_color("accent"):
+	if hovered_character_title_label == null or hovered_character_title_label.get_theme_color("font_color") != BattleUIStyle.get_color("text_guide") or hovered_character_skill_name_labels.size() != 1 or (hovered_character_skill_name_labels[0] as Label).get_theme_color("font_color") != BattleUIStyle.get_color("text_guide"):
 		_fail("player_hover_accent_colors:%s/%s" % [hovered_character_title_label.get_theme_color("font_color") if hovered_character_title_label != null else Color.TRANSPARENT, (hovered_character_skill_name_labels[0] as Label).get_theme_color("font_color") if hovered_character_skill_name_labels.size() == 1 else Color.TRANSPARENT])
 		return
 	# 重复刷新前的稳定信息框尺寸；姬子等回合内高频广播角色必须保持同一自动换行布局。
@@ -732,6 +732,8 @@ func _run() -> void:
 	await get_tree().process_frame
 	# 最终宽度写入后再等待一帧完成自动换行；透明期间不会在默认位置或临界换行状态绘制文字。
 	await get_tree().process_frame
+	# 入场组件在完成测量后淡入；等待有限过渡结束再检查最终不透明度。
+	await get_tree().create_timer(0.36).timeout
 	if not information_box.is_hover_information_visible() or not is_equal_approx(pre_layout_hover_panel.modulate.a, 1.0):
 		_fail("player_hover_post_layout_visibility:%s/%s" % [information_box.is_hover_information_visible(), pre_layout_hover_panel.modulate.a])
 		return

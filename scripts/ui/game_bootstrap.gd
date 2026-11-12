@@ -6,6 +6,13 @@ extends Control
 ## 正式首页场景路径；以字符串保存避免preload重新引入启动阻塞，通常无需运行时修改。
 @export_file("*.tscn") var main_scene_path: String = "res://scenes/main.tscn"
 
+## 启动进度轨道色；固定纸面中性色，加载主题前即可使用，运行时无需修改。
+@export var progress_track_color: Color = Color("d4cfc5")
+## 启动进度填充色；低饱和金色与首页一致，运行时无需修改。
+@export var progress_fill_color: Color = Color("b59a66")
+## 进度条圆角半径；默认3逻辑像素，只影响绘制，运行时无需修改。
+@export_range(0, 12, 1) var progress_corner_radius: int = 3
+
 ## 启动状态文字；加载失败时保留可读错误，避免无反馈黑屏。
 @onready var _status_label: Label = %BootStatus
 
@@ -15,6 +22,16 @@ extends Control
 
 ## 先留出首帧绘制机会，再提交后台场景请求；启动界面本身始终可响应系统窗口事件。
 func _ready() -> void:
+	# 启动入口使用轻量样式工厂；不加载牌桌、原画或规则资源。
+	var progress_track: StyleBoxFlat = StyleBoxFlat.new()
+	progress_track.bg_color = progress_track_color
+	progress_track.set_corner_radius_all(progress_corner_radius)
+	_progress_bar.add_theme_stylebox_override("background", progress_track)
+	# 金色进度填充；宽度仍由后台场景加载进度驱动，颜色不影响数值。
+	var progress_fill: StyleBoxFlat = StyleBoxFlat.new()
+	progress_fill.bg_color = progress_fill_color
+	progress_fill.set_corner_radius_all(progress_corner_radius)
+	_progress_bar.add_theme_stylebox_override("fill", progress_fill)
 	set_process(false)
 	await get_tree().process_frame
 	await get_tree().process_frame

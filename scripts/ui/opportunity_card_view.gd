@@ -186,6 +186,7 @@ func set_interactive(interactive: bool) -> void:
 	_refresh_interaction_state()
 
 
+## 纸面正文采用card_text，品质通过淡底和顶部色条表达；原规则描述与牌面尺寸保持一致。
 ## 根据品质应用整张卡面颜色；颜色仅表达稀有度，不改变正文与规则数值。
 func _apply_quality_style(quality_id: String) -> void:
 	# 品质主色；灰色用于不参与随机抽取的关卡专属机缘，其余五种颜色用于普通三选一卡池。
@@ -199,18 +200,18 @@ func _apply_quality_style(quality_id: String) -> void:
 	}.get(quality_id, Color("3f8f58")) as Color
 	_rebuild_panel_style_cache()
 	_refresh_visual_state()
-	_description_label.add_theme_color_override("font_color", Color("fff8e8"))
+	_description_label.add_theme_color_override("font_color", BattleUIStyle.get_color("card_text"))
 	_description_label.add_theme_color_override("font_outline_color", Color(0.03, 0.02, 0.02, 0.92))
-	_description_label.add_theme_constant_override("outline_size", 4)
-	_skill_prefix_label.add_theme_color_override("font_color", Color("fff8e8"))
+	_description_label.add_theme_constant_override("outline_size", 0)
+	_skill_prefix_label.add_theme_color_override("font_color", BattleUIStyle.get_color("card_text"))
 	_skill_prefix_label.add_theme_color_override("font_outline_color", Color(0.03, 0.02, 0.02, 0.92))
-	_skill_prefix_label.add_theme_constant_override("outline_size", 4)
-	_skill_name_label.add_theme_color_override("font_color", Color("fff8e8"))
+	_skill_prefix_label.add_theme_constant_override("outline_size", 0)
+	_skill_name_label.add_theme_color_override("font_color", BattleUIStyle.get_color("card_text"))
 	_skill_name_label.add_theme_color_override("font_outline_color", Color(0.03, 0.02, 0.02, 0.92))
-	_skill_name_label.add_theme_constant_override("outline_size", 4)
-	_skill_suffix_label.add_theme_color_override("font_color", Color("fff8e8"))
+	_skill_name_label.add_theme_constant_override("outline_size", 0)
+	_skill_suffix_label.add_theme_color_override("font_color", BattleUIStyle.get_color("card_text"))
 	_skill_suffix_label.add_theme_color_override("font_outline_color", Color(0.03, 0.02, 0.02, 0.92))
-	_skill_suffix_label.add_theme_constant_override("outline_size", 4)
+	_skill_suffix_label.add_theme_constant_override("outline_size", 0)
 
 
 ## 根据品质、悬停与交互状态重绘卡面；悬停只提亮原品质色，不替换品质颜色。
@@ -229,7 +230,7 @@ func _refresh_visual_state() -> void:
 ## 按当前品质与导出参数建立普通、悬停两份样式；只在配置变化时分配资源，悬停热路径仅切换引用。
 func _rebuild_panel_style_cache() -> void:
 	# 普通卡面背景色；固定按品质主色压暗0.42，确保白色正文在所有品质下均可阅读。
-	var normal_background_color: Color = _quality_color.darkened(0.42)
+	var normal_background_color: Color = BattleUIStyle.get_color("card_paper").lerp(_quality_color, 0.06)
 	_normal_panel_style = _create_panel_style(normal_background_color, 4)
 	# 悬停卡面背景色；按检查器比例提亮并增加配置边框像素，不改变品质主色或卡面尺寸。
 	var hovered_background_color: Color = normal_background_color.lightened(hover_lightening)
@@ -242,15 +243,16 @@ func _create_panel_style(background_color: Color, border_width: int) -> StyleBox
 	var panel_style: StyleBoxFlat = StyleBoxFlat.new()
 	panel_style.bg_color = background_color
 	panel_style.border_color = _quality_color.lightened(0.30)
-	panel_style.set_border_width_all(border_width)
+	panel_style.set_border_width_all(maxi(1, border_width - 3))
+	panel_style.border_width_top = border_width + 2
 	# 内容区内缩；显式固定四边边距，禁止悬停边框由4像素变为5像素时挤压PanelContainer内部文字布局。
 	panel_style.content_margin_left = CARD_CONTENT_MARGIN
 	panel_style.content_margin_top = CARD_CONTENT_MARGIN
 	panel_style.content_margin_right = CARD_CONTENT_MARGIN
 	panel_style.content_margin_bottom = CARD_CONTENT_MARGIN
 	panel_style.set_corner_radius_all(10)
-	panel_style.shadow_color = Color(_quality_color.darkened(0.8), 0.50)
-	panel_style.shadow_size = 14
+	panel_style.shadow_color = Color(_quality_color.darkened(0.8), 0.14)
+	panel_style.shadow_size = 6
 	panel_style.shadow_offset = Vector2(0.0, 5.0)
 	return panel_style
 

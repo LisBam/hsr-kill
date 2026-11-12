@@ -1134,10 +1134,10 @@ layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
-offset_left = 22.0
-offset_top = 12.0
-offset_right = -22.0
-offset_bottom = -18.0
+offset_left = 8.0
+offset_top = 8.0
+offset_right = -8.0
+offset_bottom = -8.0
 grow_horizontal = 2
 grow_vertical = 2
 mouse_filter = 2
@@ -1148,10 +1148,10 @@ unique_name_in_owner = true
 layout_mode = 1
 anchors_preset = 10
 anchor_right = 1.0
-offset_left = 54.0
-offset_top = 22.0
-offset_right = -54.0
-offset_bottom = 88.0
+offset_left = 8.0
+offset_top = 8.0
+offset_right = -8.0
+offset_bottom = 96.0
 grow_horizontal = 2
 
 [node name="TopNavigationContent" type="HBoxContainer" parent="MainMenu/MainMenuTopNavigation" unique_id=147039208]
@@ -1166,7 +1166,7 @@ theme_override_constants/separation = 0
 [node name="MainMenuTitle" type="Label" parent="MainMenu/MainMenuTopNavigation/TopNavigationContent/MainMenuBrand" unique_id=251785243]
 unique_name_in_owner = true
 layout_mode = 2
-theme_override_font_sizes/font_size = 24
+theme_override_font_sizes/font_size = 28
 text = "崩铁杀"
 vertical_alignment = 2
 
@@ -1185,7 +1185,7 @@ color = Color(0.5, 0.5, 0.5, 0.5)
 
 [node name="TopIdentityModeButton" type="Button" parent="MainMenu/MainMenuTopNavigation/TopNavigationContent" unique_id=849120694]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(192, 0)
+custom_minimum_size = Vector2(206, 0)
 layout_mode = 2
 mouse_default_cursor_shape = 2
 theme_override_font_sizes/font_size = 18
@@ -1208,7 +1208,7 @@ color = Color(0.831373, 0.709804, 0.372549, 1)
 
 [node name="MainMenuOnlineSettingsButton" type="Button" parent="MainMenu/MainMenuTopNavigation/TopNavigationContent" unique_id=749061043]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(192, 0)
+custom_minimum_size = Vector2(206, 0)
 layout_mode = 2
 mouse_default_cursor_shape = 2
 theme_override_font_sizes/font_size = 18
@@ -1231,7 +1231,7 @@ color = Color(0.831373, 0.709804, 0.372549, 1)
 
 [node name="MainMenuAllCardsButton" type="Button" parent="MainMenu/MainMenuTopNavigation/TopNavigationContent" unique_id=852951160]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(192, 0)
+custom_minimum_size = Vector2(206, 0)
 layout_mode = 2
 mouse_default_cursor_shape = 2
 theme_override_font_sizes/font_size = 18
@@ -1254,7 +1254,7 @@ color = Color(0.831373, 0.709804, 0.372549, 1)
 
 [node name="MainMenuMatchReplayButton" type="Button" parent="MainMenu/MainMenuTopNavigation/TopNavigationContent" unique_id=903412765]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(192, 0)
+custom_minimum_size = Vector2(206, 0)
 layout_mode = 2
 mouse_default_cursor_shape = 2
 theme_override_font_sizes/font_size = 18
@@ -1286,21 +1286,22 @@ layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
-offset_left = 54.0
-offset_top = 104.0
-offset_right = -54.0
-offset_bottom = -38.0
+offset_left = 36.0
+offset_top = 118.0
+offset_right = -36.0
+offset_bottom = -28.0
 grow_horizontal = 2
 grow_vertical = 2
 
-[node name="MainMenuContent" type="HBoxContainer" parent="MainMenu/MainMenuFrame" unique_id=873369471]
+[node name="MainMenuContent" type="VBoxContainer" parent="MainMenu/MainMenuFrame" unique_id=873369471]
 layout_mode = 2
-theme_override_constants/separation = 14
+theme_override_constants/separation = 18
 
 [node name="MainMenuModeList" type="PanelContainer" parent="MainMenu/MainMenuFrame/MainMenuContent" unique_id=138292666]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(286, 0)
+custom_minimum_size = Vector2(0, 0)
 layout_mode = 2
+size_flags_vertical = 3
 
 [node name="ModeListVBox" type="VBoxContainer" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList" unique_id=228920184]
 layout_mode = 2
@@ -1308,330 +1309,367 @@ theme_override_constants/separation = 12
 
 [node name="MainMenuModeListTitle" type="Label" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox" unique_id=573889024]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 48)
+custom_minimum_size = Vector2(0, 40)
 layout_mode = 2
-theme_override_font_sizes/font_size = 19
-text = "模式选择"
+theme_override_font_sizes/font_size = 22
+text = "选择你的战局     /     GAME MODES"
 vertical_alignment = 1
 
 [node name="MainMenuModeScroll" type="ScrollContainer" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox" unique_id=1466164604]
 unique_name_in_owner = true
 layout_mode = 2
 size_flags_vertical = 3
-horizontal_scroll_mode = 0
-vertical_scroll_mode = 2
+horizontal_scroll_mode = 2
+vertical_scroll_mode = 0
+follow_focus = true
 
-[node name="ModeCardsVBox" type="VBoxContainer" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/MainMenuModeScroll" unique_id=1004611814]
+[node name="ModeCardsVBox" type="HBoxContainer" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/MainMenuModeScroll" unique_id=1004611814]
 unique_name_in_owner = true
 layout_mode = 2
-size_flags_horizontal = 3
-theme_override_constants/separation = 12
+size_flags_horizontal = 1
+theme_override_constants/separation = 20
+size_flags_vertical = 3
 
 [node name="IdentityModeButton" type="Button" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/MainMenuModeScroll/ModeCardsVBox" unique_id=129181071]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 100)
+custom_minimum_size = Vector2(264, 350)
 layout_mode = 2
 mouse_default_cursor_shape = 2
 toggle_mode = true
 button_pressed = true
 alignment = 0
+clip_contents = true
+size_flags_vertical = 3
 
 [node name="IdentityModeContent" type="VBoxContainer" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/MainMenuModeScroll/ModeCardsVBox/IdentityModeButton" unique_id=1109330441]
 layout_mode = 1
 anchors_preset = 15
+anchor_top = 1.0
 anchor_right = 1.0
 anchor_bottom = 1.0
-offset_left = 20.0
-offset_top = 14.0
-offset_right = -14.0
-offset_bottom = -14.0
+offset_left = 24.0
+offset_top = -96.0
+offset_right = -18.0
+offset_bottom = -22.0
 grow_horizontal = 2
 grow_vertical = 2
 mouse_filter = 2
-theme_override_constants/separation = 2
+theme_override_constants/separation = 7
 
 [node name="IdentityModeName" type="Label" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/MainMenuModeScroll/ModeCardsVBox/IdentityModeButton/IdentityModeContent" unique_id=129181072]
 unique_name_in_owner = true
 layout_mode = 2
-theme_override_font_sizes/font_size = 27
+theme_override_font_sizes/font_size = 25
 text = "身份模式"
 
 [node name="IdentityModePlayerCount" type="Label" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/MainMenuModeScroll/ModeCardsVBox/IdentityModeButton/IdentityModeContent" unique_id=129181073]
 unique_name_in_owner = true
 layout_mode = 2
-theme_override_font_sizes/font_size = 16
+theme_override_font_sizes/font_size = 15
 text = "2-10人"
 
 [node name="IdentityModeIndicator" type="ColorRect" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/MainMenuModeScroll/ModeCardsVBox/IdentityModeButton" unique_id=163114730]
 unique_name_in_owner = true
 layout_mode = 1
 anchors_preset = 9
-anchor_bottom = 1.0
-offset_right = 5.0
+anchor_right = 1.0
+anchor_bottom = 0.0
+offset_right = 0.0
+offset_bottom = 4.0
 grow_vertical = 2
 mouse_filter = 2
 color = Color(0.831373, 0.709804, 0.372549, 1)
 
 [node name="DouDizhuModeButton" type="Button" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/MainMenuModeScroll/ModeCardsVBox" unique_id=129181081]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 100)
+custom_minimum_size = Vector2(264, 350)
 layout_mode = 2
 mouse_default_cursor_shape = 2
 toggle_mode = true
 alignment = 0
+clip_contents = true
+size_flags_vertical = 3
 
 [node name="DouDizhuModeContent" type="VBoxContainer" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/MainMenuModeScroll/ModeCardsVBox/DouDizhuModeButton" unique_id=1109330442]
 layout_mode = 1
 anchors_preset = 15
+anchor_top = 1.0
 anchor_right = 1.0
 anchor_bottom = 1.0
-offset_left = 20.0
-offset_top = 14.0
-offset_right = -14.0
-offset_bottom = -14.0
+offset_left = 24.0
+offset_top = -96.0
+offset_right = -18.0
+offset_bottom = -22.0
 grow_horizontal = 2
 grow_vertical = 2
 mouse_filter = 2
-theme_override_constants/separation = 2
+theme_override_constants/separation = 7
 
 [node name="DouDizhuModeName" type="Label" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/MainMenuModeScroll/ModeCardsVBox/DouDizhuModeButton/DouDizhuModeContent" unique_id=129181082]
 unique_name_in_owner = true
 layout_mode = 2
-theme_override_font_sizes/font_size = 27
+theme_override_font_sizes/font_size = 25
 text = "斗地主"
 
 [node name="DouDizhuModePlayerCount" type="Label" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/MainMenuModeScroll/ModeCardsVBox/DouDizhuModeButton/DouDizhuModeContent" unique_id=129181083]
 unique_name_in_owner = true
 layout_mode = 2
-theme_override_font_sizes/font_size = 16
+theme_override_font_sizes/font_size = 15
 text = "3/5人"
 
 [node name="DouDizhuModeIndicator" type="ColorRect" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/MainMenuModeScroll/ModeCardsVBox/DouDizhuModeButton" unique_id=163114731]
 unique_name_in_owner = true
 layout_mode = 1
 anchors_preset = 9
-anchor_bottom = 1.0
-offset_right = 5.0
+anchor_right = 1.0
+anchor_bottom = 0.0
+offset_right = 0.0
+offset_bottom = 4.0
 grow_vertical = 2
 mouse_filter = 2
 color = Color(0.831373, 0.709804, 0.372549, 1)
 
 [node name="Team2v2ModeButton" type="Button" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/MainMenuModeScroll/ModeCardsVBox" unique_id=129181091]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 100)
+custom_minimum_size = Vector2(264, 350)
 layout_mode = 2
 mouse_default_cursor_shape = 2
 toggle_mode = true
 alignment = 0
+clip_contents = true
+size_flags_vertical = 3
 
 [node name="Team2v2ModeContent" type="VBoxContainer" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/MainMenuModeScroll/ModeCardsVBox/Team2v2ModeButton" unique_id=1109330443]
 layout_mode = 1
 anchors_preset = 15
+anchor_top = 1.0
 anchor_right = 1.0
 anchor_bottom = 1.0
-offset_left = 20.0
-offset_top = 14.0
-offset_right = -14.0
-offset_bottom = -14.0
+offset_left = 24.0
+offset_top = -96.0
+offset_right = -18.0
+offset_bottom = -22.0
 grow_horizontal = 2
 grow_vertical = 2
 mouse_filter = 2
-theme_override_constants/separation = 2
+theme_override_constants/separation = 7
 
 [node name="Team2v2ModeName" type="Label" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/MainMenuModeScroll/ModeCardsVBox/Team2v2ModeButton/Team2v2ModeContent" unique_id=129181092]
 unique_name_in_owner = true
 layout_mode = 2
-theme_override_font_sizes/font_size = 27
+theme_override_font_sizes/font_size = 25
 text = "2v2"
 
 [node name="Team2v2ModePlayerCount" type="Label" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/MainMenuModeScroll/ModeCardsVBox/Team2v2ModeButton/Team2v2ModeContent" unique_id=129181093]
 unique_name_in_owner = true
 layout_mode = 2
-theme_override_font_sizes/font_size = 16
+theme_override_font_sizes/font_size = 15
 text = "4人"
 
 [node name="Team2v2ModeIndicator" type="ColorRect" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/MainMenuModeScroll/ModeCardsVBox/Team2v2ModeButton" unique_id=163114732]
 unique_name_in_owner = true
 layout_mode = 1
 anchors_preset = 9
-anchor_bottom = 1.0
-offset_right = 5.0
+anchor_right = 1.0
+anchor_bottom = 0.0
+offset_right = 0.0
+offset_bottom = 4.0
 grow_vertical = 2
 mouse_filter = 2
 color = Color(0.831373, 0.709804, 0.372549, 1)
 
 [node name="WheelDuelModeButton" type="Button" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/MainMenuModeScroll/ModeCardsVBox" unique_id=1622993900]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 100)
+custom_minimum_size = Vector2(264, 350)
 layout_mode = 2
 mouse_default_cursor_shape = 2
 toggle_mode = true
 alignment = 0
+clip_contents = true
+size_flags_vertical = 3
 
 [node name="WheelDuelModeContent" type="VBoxContainer" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/MainMenuModeScroll/ModeCardsVBox/WheelDuelModeButton" unique_id=829726486]
 layout_mode = 1
 anchors_preset = 15
+anchor_top = 1.0
 anchor_right = 1.0
 anchor_bottom = 1.0
-offset_left = 20.0
-offset_top = 14.0
-offset_right = -14.0
-offset_bottom = -14.0
+offset_left = 24.0
+offset_top = -96.0
+offset_right = -18.0
+offset_bottom = -22.0
 grow_horizontal = 2
 grow_vertical = 2
 mouse_filter = 2
-theme_override_constants/separation = 2
+theme_override_constants/separation = 7
 
 [node name="WheelDuelModeName" type="Label" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/MainMenuModeScroll/ModeCardsVBox/WheelDuelModeButton/WheelDuelModeContent" unique_id=1633810875]
 unique_name_in_owner = true
 layout_mode = 2
-theme_override_font_sizes/font_size = 27
+theme_override_font_sizes/font_size = 25
 text = "1v1车轮战"
 
 [node name="WheelDuelModePlayerCount" type="Label" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/MainMenuModeScroll/ModeCardsVBox/WheelDuelModeButton/WheelDuelModeContent" unique_id=2086648793]
 unique_name_in_owner = true
 layout_mode = 2
-theme_override_font_sizes/font_size = 16
+theme_override_font_sizes/font_size = 15
 text = "2人"
 
 [node name="WheelDuelModeIndicator" type="ColorRect" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/MainMenuModeScroll/ModeCardsVBox/WheelDuelModeButton" unique_id=2128503405]
 unique_name_in_owner = true
 layout_mode = 1
 anchors_preset = 9
-anchor_bottom = 1.0
-offset_right = 5.0
+anchor_right = 1.0
+anchor_bottom = 0.0
+offset_right = 0.0
+offset_bottom = 4.0
 grow_vertical = 2
 mouse_filter = 2
 color = Color(0.831373, 0.709804, 0.372549, 1)
 
 [node name="OpportunityBrawlModeButton" type="Button" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/MainMenuModeScroll/ModeCardsVBox" unique_id=2039834801]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 100)
+custom_minimum_size = Vector2(264, 350)
 layout_mode = 2
 mouse_default_cursor_shape = 2
 toggle_mode = true
 alignment = 0
+clip_contents = true
+size_flags_vertical = 3
 
 [node name="OpportunityBrawlModeContent" type="VBoxContainer" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/MainMenuModeScroll/ModeCardsVBox/OpportunityBrawlModeButton" unique_id=1997866191]
 layout_mode = 1
 anchors_preset = 15
+anchor_top = 1.0
 anchor_right = 1.0
 anchor_bottom = 1.0
-offset_left = 20.0
-offset_top = 14.0
-offset_right = -14.0
-offset_bottom = -14.0
+offset_left = 24.0
+offset_top = -96.0
+offset_right = -18.0
+offset_bottom = -22.0
 grow_horizontal = 2
 grow_vertical = 2
 mouse_filter = 2
-theme_override_constants/separation = 2
+theme_override_constants/separation = 7
 
 [node name="OpportunityBrawlModeName" type="Label" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/MainMenuModeScroll/ModeCardsVBox/OpportunityBrawlModeButton/OpportunityBrawlModeContent" unique_id=577081913]
 unique_name_in_owner = true
 layout_mode = 2
-theme_override_font_sizes/font_size = 27
+theme_override_font_sizes/font_size = 25
 text = "机缘大乱斗"
 
 [node name="OpportunityBrawlModePlayerCount" type="Label" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/MainMenuModeScroll/ModeCardsVBox/OpportunityBrawlModeButton/OpportunityBrawlModeContent" unique_id=1196767519]
 unique_name_in_owner = true
 layout_mode = 2
-theme_override_font_sizes/font_size = 16
+theme_override_font_sizes/font_size = 15
 text = "2-10人"
 
 [node name="OpportunityBrawlModeIndicator" type="ColorRect" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/MainMenuModeScroll/ModeCardsVBox/OpportunityBrawlModeButton" unique_id=1229413148]
 unique_name_in_owner = true
 layout_mode = 1
 anchors_preset = 9
-anchor_bottom = 1.0
-offset_right = 5.0
+anchor_right = 1.0
+anchor_bottom = 0.0
+offset_right = 0.0
+offset_bottom = 4.0
 grow_vertical = 2
 mouse_filter = 2
 color = Color(0.831373, 0.709804, 0.372549, 1)
 
 [node name="ConquestModeButton" type="Button" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/MainMenuModeScroll/ModeCardsVBox" unique_id=425616849]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 100)
+custom_minimum_size = Vector2(264, 350)
 layout_mode = 2
 mouse_default_cursor_shape = 2
 toggle_mode = true
 alignment = 0
+clip_contents = true
+size_flags_vertical = 3
 
 [node name="ConquestModeContent" type="VBoxContainer" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/MainMenuModeScroll/ModeCardsVBox/ConquestModeButton" unique_id=895808783]
 layout_mode = 1
 anchors_preset = 15
+anchor_top = 1.0
 anchor_right = 1.0
 anchor_bottom = 1.0
-offset_left = 20.0
-offset_top = 14.0
-offset_right = -14.0
-offset_bottom = -14.0
+offset_left = 24.0
+offset_top = -96.0
+offset_right = -18.0
+offset_bottom = -22.0
 grow_horizontal = 2
 grow_vertical = 2
 mouse_filter = 2
-theme_override_constants/separation = 2
+theme_override_constants/separation = 7
 
 [node name="ConquestModeName" type="Label" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/MainMenuModeScroll/ModeCardsVBox/ConquestModeButton/ConquestModeContent" unique_id=127818140]
 unique_name_in_owner = true
 layout_mode = 2
-theme_override_font_sizes/font_size = 27
+theme_override_font_sizes/font_size = 25
 text = "过关斩将"
 
 [node name="ConquestModePlayerCount" type="Label" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/MainMenuModeScroll/ModeCardsVBox/ConquestModeButton/ConquestModeContent" unique_id=1253392206]
 unique_name_in_owner = true
 layout_mode = 2
-theme_override_font_sizes/font_size = 16
+theme_override_font_sizes/font_size = 15
 text = "单人1人 / 联机2-4人"
 
 [node name="ConquestModeIndicator" type="ColorRect" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/MainMenuModeScroll/ModeCardsVBox/ConquestModeButton" unique_id=1106655057]
 unique_name_in_owner = true
 layout_mode = 1
 anchors_preset = 9
-anchor_bottom = 1.0
-offset_right = 5.0
+anchor_right = 1.0
+anchor_bottom = 0.0
+offset_right = 0.0
+offset_bottom = 4.0
 grow_vertical = 2
 mouse_filter = 2
 color = Color(0.831373, 0.709804, 0.372549, 1)
 
 [node name="WinnerTakesAllModeButton" type="Button" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/MainMenuModeScroll/ModeCardsVBox" unique_id=2141900001]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 100)
+custom_minimum_size = Vector2(264, 350)
 layout_mode = 2
 mouse_default_cursor_shape = 2
 toggle_mode = true
 alignment = 0
+clip_contents = true
+size_flags_vertical = 3
 
 [node name="WinnerTakesAllModeContent" type="VBoxContainer" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/MainMenuModeScroll/ModeCardsVBox/WinnerTakesAllModeButton" unique_id=2141900002]
 layout_mode = 1
 anchors_preset = 15
+anchor_top = 1.0
 anchor_right = 1.0
 anchor_bottom = 1.0
-offset_left = 20.0
-offset_top = 14.0
-offset_right = -14.0
-offset_bottom = -14.0
+offset_left = 24.0
+offset_top = -96.0
+offset_right = -18.0
+offset_bottom = -22.0
 grow_horizontal = 2
 grow_vertical = 2
 mouse_filter = 2
-theme_override_constants/separation = 2
+theme_override_constants/separation = 7
 
 [node name="WinnerTakesAllModeName" type="Label" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/MainMenuModeScroll/ModeCardsVBox/WinnerTakesAllModeButton/WinnerTakesAllModeContent" unique_id=2141900003]
 unique_name_in_owner = true
 layout_mode = 2
-theme_override_font_sizes/font_size = 27
+theme_override_font_sizes/font_size = 25
 text = "胜者为王"
 
 [node name="WinnerTakesAllModePlayerCount" type="Label" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/MainMenuModeScroll/ModeCardsVBox/WinnerTakesAllModeButton/WinnerTakesAllModeContent" unique_id=2141900004]
 unique_name_in_owner = true
 layout_mode = 2
-theme_override_font_sizes/font_size = 16
+theme_override_font_sizes/font_size = 15
 text = "2-10人"
 
 [node name="WinnerTakesAllModeIndicator" type="ColorRect" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox/MainMenuModeScroll/ModeCardsVBox/WinnerTakesAllModeButton" unique_id=2141900005]
 unique_name_in_owner = true
 layout_mode = 1
 anchors_preset = 9
-anchor_bottom = 1.0
-offset_right = 5.0
+anchor_right = 1.0
+anchor_bottom = 0.0
+offset_right = 0.0
+offset_bottom = 4.0
 grow_vertical = 2
 mouse_filter = 2
 color = Color(0.831373, 0.709804, 0.372549, 1)
@@ -1640,6 +1678,7 @@ color = Color(0.831373, 0.709804, 0.372549, 1)
 unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
+custom_minimum_size = Vector2(0, 104)
 
 [node name="MainMenuPreviewContent" type="Control" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuPreviewPanel" unique_id=786946542]
 layout_mode = 2
@@ -1655,6 +1694,7 @@ mouse_filter = 2
 texture = ExtResource("22_identity_menu_background")
 expand_mode = 1
 stretch_mode = 6
+visible = false
 
 [node name="MainMenuPreviewShade" type="ColorRect" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuPreviewPanel/MainMenuPreviewContent" unique_id=100783673]
 unique_name_in_owner = true
@@ -1666,6 +1706,7 @@ grow_horizontal = 2
 grow_vertical = 2
 mouse_filter = 2
 color = Color(0.11, 0.1, 0.09, 0.18)
+visible = false
 
 [node name="MainMenuPreviewModeBadge" type="PanelContainer" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuPreviewPanel/MainMenuPreviewContent" unique_id=33715719]
 unique_name_in_owner = true
@@ -1674,6 +1715,7 @@ layout_mode = 0
 offset_right = 170.0
 offset_bottom = 66.0
 mouse_filter = 2
+visible = false
 
 [node name="MainMenuPreviewModeBadgeLabel" type="Label" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuPreviewPanel/MainMenuPreviewContent/MainMenuPreviewModeBadge" unique_id=815089325]
 unique_name_in_owner = true
@@ -1687,12 +1729,12 @@ vertical_alignment = 1
 unique_name_in_owner = true
 layout_mode = 1
 anchors_preset = 1
-anchor_left = 1.0
-anchor_right = 1.0
-offset_left = -390.0
-offset_top = 28.0
-offset_right = -24.0
-offset_bottom = 188.0
+anchor_left = 0.0
+anchor_right = 0.0
+offset_left = 8.0
+offset_top = 4.0
+offset_right = 420.0
+offset_bottom = 92.0
 grow_horizontal = 0
 
 [node name="ModeSummaryVBox" type="VBoxContainer" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuPreviewPanel/MainMenuPreviewContent/MainMenuModeSummaryPanel" unique_id=1102338951]
@@ -1705,46 +1747,52 @@ layout_mode = 2
 theme_override_font_sizes/font_size = 14
 text = "当前模式"
 horizontal_alignment = 2
+visible = false
 
 [node name="MainMenuModeTitle" type="Label" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuPreviewPanel/MainMenuPreviewContent/MainMenuModeSummaryPanel/ModeSummaryVBox" unique_id=631701119]
 unique_name_in_owner = true
 layout_mode = 2
 theme_override_colors/font_outline_color = Color(0.05, 0.05, 0.05, 1)
-theme_override_constants/outline_size = 5
-theme_override_font_sizes/font_size = 38
+theme_override_constants/outline_size = 0
+theme_override_font_sizes/font_size = 26
 text = "身份模式"
-horizontal_alignment = 2
+horizontal_alignment = 0
 
 [node name="MainMenuModeDescription" type="Label" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuPreviewPanel/MainMenuPreviewContent/MainMenuModeSummaryPanel/ModeSummaryVBox" unique_id=176024840]
 unique_name_in_owner = true
 layout_mode = 2
 theme_override_colors/font_outline_color = Color(0.05, 0.05, 0.05, 1)
-theme_override_constants/outline_size = 3
-theme_override_font_sizes/font_size = 18
+theme_override_constants/outline_size = 0
+theme_override_font_sizes/font_size = 15
 text = "标准身份局 · 2—10人"
-horizontal_alignment = 2
+horizontal_alignment = 0
 
 [node name="MainMenuModeRuleHint" type="Label" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuPreviewPanel/MainMenuPreviewContent/MainMenuModeSummaryPanel/ModeSummaryVBox" unique_id=1046112279]
 unique_name_in_owner = true
 layout_mode = 2
-theme_override_font_sizes/font_size = 14
+theme_override_font_sizes/font_size = 13
 text = "随机身份 · 阵营对抗"
-horizontal_alignment = 2
+horizontal_alignment = 0
+theme_override_constants/outline_size = 0
 
 [node name="MainMenuActionPanel" type="PanelContainer" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuPreviewPanel/MainMenuPreviewContent" unique_id=378518176]
 unique_name_in_owner = true
 layout_mode = 1
 anchors_preset = 12
-anchor_top = 1.0
+anchor_left = 1.0
+anchor_top = 0.0
 anchor_right = 1.0
 anchor_bottom = 1.0
-offset_top = -92.0
+offset_left = -635.0
+offset_top = 10.0
+offset_right = -8.0
+offset_bottom = -10.0
 grow_horizontal = 2
 grow_vertical = 0
 
 [node name="MainMenuActionRow" type="HBoxContainer" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuPreviewPanel/MainMenuPreviewContent/MainMenuActionPanel" unique_id=171002689]
 layout_mode = 2
-theme_override_constants/separation = 14
+theme_override_constants/separation = 12
 alignment = 2
 
 [node name="MainMenuStatusLabel" type="Label" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuPreviewPanel/MainMenuPreviewContent/MainMenuActionPanel/MainMenuActionRow" unique_id=2062970460]
@@ -1761,24 +1809,27 @@ unique_name_in_owner = true
 custom_minimum_size = Vector2(112, 56)
 layout_mode = 2
 mouse_default_cursor_shape = 2
-theme_override_font_sizes/font_size = 20
+theme_override_font_sizes/font_size = 18
 text = "设置"
+size_flags_vertical = 4
 
 [node name="MainMenuLanButton" type="Button" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuPreviewPanel/MainMenuPreviewContent/MainMenuActionPanel/MainMenuActionRow" unique_id=786532070]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(154, 56)
 layout_mode = 2
 mouse_default_cursor_shape = 2
-theme_override_font_sizes/font_size = 20
+theme_override_font_sizes/font_size = 18
 text = "局域网联机"
+size_flags_vertical = 4
 
 [node name="StartGameButton" type="Button" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuPreviewPanel/MainMenuPreviewContent/MainMenuActionPanel/MainMenuActionRow" unique_id=194863559]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(250, 56)
+custom_minimum_size = Vector2(230, 56)
 layout_mode = 2
 mouse_default_cursor_shape = 2
-theme_override_font_sizes/font_size = 24
+theme_override_font_sizes/font_size = 22
 text = "开始游戏"
+size_flags_vertical = 4
 
 [node name="MainMenuSettingsBackdrop" type="ColorRect" parent="MainMenu" unique_id=306655850]
 unique_name_in_owner = true
@@ -2197,15 +2248,21 @@ text = "返回"
 
 [node name="LanLobbyPanel" parent="MainMenu" unique_id=188323044 instance=ExtResource("24_lan_lobby")]
 
+
 [node name="OnlineSettingsPanel" parent="MainMenu" unique_id=1986582550 instance=ExtResource("25_online_settings")]
+
 
 [node name="AllCardsPanel" parent="MainMenu" unique_id=1417086629 instance=ExtResource("31_all_cards")]
 
+
 [node name="MatchReplayPanel" parent="MainMenu" unique_id=903412767 instance=ExtResource("32_match_replay")]
+
 
 [node name="OnlineLobbyPanel" parent="MainMenu" unique_id=1648829861 instance=ExtResource("26_online_lobby")]
 
+
 [node name="MenuPresentation" parent="MainMenu" unique_id=826376731 instance=ExtResource("51_menu_presentation")]
+
 
 [node name="BattlePresentation" type="Node" parent="." unique_id=573280642]
 script = ExtResource("52_battle_presentation")

@@ -194,6 +194,7 @@ func refresh_ui_style() -> void:
 	_modal_title_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	_modal_hint_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	_modal_path_input.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
+	_modal_path_input.add_theme_color_override("font_placeholder_color", BattleUIStyle.get_color("text_muted"))
 	_modal_panel.add_theme_stylebox_override("panel", MENU_STYLE.make_panel(BattleUIStyle.get_color("metal_panel"), BattleUIStyle.get_color("accent"), 2, 10))
 	MENU_STYLE.apply_interaction_button(_import_button)
 	MENU_STYLE.apply_interaction_button(_play_button)
@@ -239,12 +240,12 @@ func _build_interface() -> void:
 func _build_browser_content() -> void:
 	_browser_content = HBoxContainer.new()
 	_browser_content.name = "ReplayBrowserContent"
-	_browser_content.add_theme_constant_override("separation", 14)
+	_browser_content.add_theme_constant_override("separation", 28)
 	_frame.add_child(_browser_content)
 	# 左侧列表面板；固定286像素宽与“所有卡牌”侧栏对齐。
 	var side_panel: PanelContainer = PanelContainer.new()
 	side_panel.name = "ReplaySidePanel"
-	side_panel.custom_minimum_size = Vector2(286.0, 0.0)
+	side_panel.custom_minimum_size = Vector2(320.0, 0.0)
 	_browser_content.add_child(side_panel)
 	# 左侧纵向布局；标题、导入按钮、数量提示与滚动列表。
 	var side_vbox: VBoxContainer = VBoxContainer.new()
@@ -253,7 +254,7 @@ func _build_browser_content() -> void:
 	_side_title_label = Label.new()
 	_side_title_label.name = "ReplaySideTitle"
 	_side_title_label.custom_minimum_size = Vector2(0.0, 48.0)
-	_side_title_label.add_theme_font_size_override("font_size", 19)
+	_side_title_label.add_theme_font_size_override("font_size", 26)
 	_side_title_label.text = "对局回放"
 	_side_title_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	side_vbox.add_child(_side_title_label)
@@ -286,7 +287,7 @@ func _build_browser_content() -> void:
 	_detail_title_label = Label.new()
 	_detail_title_label.name = "ReplayDetailTitle"
 	_detail_title_label.custom_minimum_size = Vector2(0.0, 48.0)
-	_detail_title_label.add_theme_font_size_override("font_size", 19)
+	_detail_title_label.add_theme_font_size_override("font_size", 26)
 	_detail_title_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	detail_vbox.add_child(_detail_title_label)
 	_detail_body_label = Label.new()

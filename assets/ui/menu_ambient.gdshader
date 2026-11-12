@@ -13,6 +13,8 @@ uniform float strength : hint_range(0.0, 1.0) = 0.22;
 uniform float drift_speed : hint_range(0.0, 0.1) = 0.008;
 // 当前背景宽高比；缺省16:9，resize时由组件同步。
 uniform float aspect_ratio = 1.777778;
+// 浅色纸面采用印刷式金线，深色主题继续使用光晕；由语义注册表决定，默认开启。
+uniform bool paper_theme = true;
 
 // 确定性视觉噪声，不消费游戏规则使用的随机源。
 float hash_cell(vec2 cell) {
@@ -43,5 +45,16 @@ void fragment() {
 	// 最终背景颜色，光晕、轨道和星点按统一强度合成。
 	vec3 background = base_color.rgb + accent_color.rgb * glow * strength * 0.25;
 	background += accent_color.rgb * (orbit * 0.12 + star * shimmer * 0.65) * strength;
+	if (paper_theme) {
+		// 角落星盘的等比坐标，中心内容区只保留低对比纸色。
+		vec2 paper_point = (UV - vec2(0.97, 0.1)) * vec2(aspect_ratio, 1.0);
+		// 三条同心金线采用像素导数抗锯齿，不依赖屏幕分辨率。
+		float radius = length(paper_point);
+		float line_width = max(fwidth(radius), 0.0008);
+		float rings = 1.0 - smoothstep(line_width, line_width * 2.0, min(abs(radius - 0.61), min(abs(radius - 0.69), abs(radius - 1.25))));
+		// 对角交线形成淡淡的星图纹理，不绘制明亮闪烁星点。
+		float diagonal = 1.0 - smoothstep(line_width, line_width * 2.0, abs(paper_point.x + paper_point.y * 0.7));
+		background = mix(base_color.rgb, accent_color.rgb, (rings * 0.32 + diagonal * 0.16) * strength);
+	}
 	COLOR = vec4(background, base_color.a);
 }

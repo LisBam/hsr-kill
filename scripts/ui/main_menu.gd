@@ -424,7 +424,7 @@ func _ready() -> void:
 	_settings_close_button.pressed.connect(_close_settings)
 	_settings_backdrop.gui_input.connect(_on_settings_backdrop_gui_input)
 	# 模式列表滚轮由主菜单统一接收，避免模式卡片按钮先消费滚轮后父级滚动容器无法更新。
-	_mode_scroll.get_v_scroll_bar().value_changed.connect(_on_mode_scroll_bar_value_changed)
+	_mode_scroll.get_h_scroll_bar().value_changed.connect(_on_mode_scroll_bar_value_changed)
 	_start_game_button.pressed.connect(_request_start_game)
 	_player_count_input.min_value = minimum_player_count
 	_player_count_input.max_value = maximum_player_count
@@ -570,7 +570,7 @@ func _input(event: InputEvent) -> void:
 	var direction: float = 1.0 if mouse_event.button_index == MOUSE_BUTTON_WHEEL_DOWN else -1.0
 	# 设备滚轮倍率；缺失或零倍率按一格处理，避免合成事件无法滚动。
 	var wheel_factor: float = maxf(absf(mouse_event.factor), 1.0)
-	_set_mode_scroll_vertical(_mode_scroll.scroll_vertical + direction * mode_scroll_wheel_step * wheel_factor)
+	_set_mode_scroll_vertical(_mode_scroll.scroll_horizontal + direction * mode_scroll_wheel_step * wheel_factor)
 	get_viewport().set_input_as_handled()
 
 
@@ -637,13 +637,13 @@ func refresh_ui_style() -> void:
 	_menu_background.color = BattleUIStyle.get_color("outer_background")
 	_menu_surface.color = BattleUIStyle.get_color("table_surface")
 	_top_navigation.add_theme_stylebox_override("panel", MENU_STYLE.make_inset_panel(BattleUIStyle.get_color("rail"), BattleUIStyle.get_color("border"), 2, 8))
-	_main_frame.add_theme_stylebox_override("panel", MENU_STYLE.make_inset_panel(BattleUIStyle.get_color("rail"), BattleUIStyle.get_color("border"), 2, 8))
-	_mode_list.add_theme_stylebox_override("panel", _make_flat_inner_panel(BattleUIStyle.get_color("mode_list_panel", BattleUIStyle.get_color("panel")), BattleUIStyle.get_color("border")))
+	_main_frame.add_theme_stylebox_override("panel", MENU_STYLE.make_inset_panel(Color.TRANSPARENT, Color.TRANSPARENT, 0, 0))
+	_mode_list.add_theme_stylebox_override("panel", _make_flat_inner_panel(Color.TRANSPARENT, Color.TRANSPARENT, 0))
 	_apply_mode_scroll_bar_style()
 	_preview_panel.add_theme_stylebox_override("panel", _make_flat_inner_panel(BattleUIStyle.get_color("metal_panel"), BattleUIStyle.get_color("border")))
 	_preview_mode_badge.add_theme_stylebox_override("panel", _make_flat_inner_panel(Color(BattleUIStyle.get_color("metal_panel"), 1.0), BattleUIStyle.get_color("border"), 1, 0))
-	_mode_summary_panel.add_theme_stylebox_override("panel", _make_flat_inner_panel(Color(BattleUIStyle.get_color("metal_panel"), preview_summary_opacity), BattleUIStyle.get_color("border")))
-	_action_panel.add_theme_stylebox_override("panel", _make_flat_inner_panel(Color(BattleUIStyle.get_color("metal_panel"), preview_action_opacity), BattleUIStyle.get_color("accent"), 1, 0))
+	_mode_summary_panel.add_theme_stylebox_override("panel", _make_flat_inner_panel(Color.TRANSPARENT, Color.TRANSPARENT, 0))
+	_action_panel.add_theme_stylebox_override("panel", _make_flat_inner_panel(Color.TRANSPARENT, Color.TRANSPARENT, 0, 0))
 	_settings_panel.add_theme_stylebox_override("panel", MENU_STYLE.make_inset_panel())
 	if _mode_details_panel != null:
 		_mode_details_panel.add_theme_stylebox_override("panel", MENU_STYLE.make_inset_panel())
@@ -690,29 +690,29 @@ func refresh_ui_style() -> void:
 	_mode_title.add_theme_color_override("font_outline_color", BattleUIStyle.get_color("outer_background"))
 	_mode_description.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	_mode_description.add_theme_color_override("font_outline_color", BattleUIStyle.get_color("outer_background"))
-	(%MainMenuTitle as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
-	(%MainMenuBrandSubtitle as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_muted"))
+	(%MainMenuTitle as Label).add_theme_color_override("font_color", BattleUIStyle.on_dark())
+	(%MainMenuBrandSubtitle as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("accent"))
 	(%MainMenuModeListTitle as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
-	(%IdentityModeName as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
-	(%IdentityModePlayerCount as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
-	(%DouDizhuModeName as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
-	(%DouDizhuModePlayerCount as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
-	(%Team2v2ModeName as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
-	(%Team2v2ModePlayerCount as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	(%IdentityModeName as Label).add_theme_color_override("font_color", BattleUIStyle.on_dark())
+	(%IdentityModePlayerCount as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("accent"))
+	(%DouDizhuModeName as Label).add_theme_color_override("font_color", BattleUIStyle.on_dark())
+	(%DouDizhuModePlayerCount as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("accent"))
+	(%Team2v2ModeName as Label).add_theme_color_override("font_color", BattleUIStyle.on_dark())
+	(%Team2v2ModePlayerCount as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("accent"))
 	# 车轮战模式卡两个标签；本机编辑器可能以旧场景缓存覆写 unique 标记，缺失时跳过表现覆盖而不中断整页主题刷新。
 	var wheel_duel_mode_name_label: Label = get_node_or_null("%WheelDuelModeName") as Label
 	if wheel_duel_mode_name_label != null:
-		wheel_duel_mode_name_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
+		wheel_duel_mode_name_label.add_theme_color_override("font_color", BattleUIStyle.on_dark())
 	# 车轮战模式卡人数标签；与名称标签独立校验，任一缺失都不影响其余控件继续应用主题色。
 	var wheel_duel_mode_player_count_label: Label = get_node_or_null("%WheelDuelModePlayerCount") as Label
 	if wheel_duel_mode_player_count_label != null:
-		wheel_duel_mode_player_count_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
-	(%OpportunityBrawlModeName as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
-	(%OpportunityBrawlModePlayerCount as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
-	(%ConquestModeName as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
-	(%ConquestModePlayerCount as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
-	(%WinnerTakesAllModeName as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
-	(%WinnerTakesAllModePlayerCount as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+		wheel_duel_mode_player_count_label.add_theme_color_override("font_color", BattleUIStyle.get_color("accent"))
+	(%OpportunityBrawlModeName as Label).add_theme_color_override("font_color", BattleUIStyle.on_dark())
+	(%OpportunityBrawlModePlayerCount as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("accent"))
+	(%ConquestModeName as Label).add_theme_color_override("font_color", BattleUIStyle.on_dark())
+	(%ConquestModePlayerCount as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("accent"))
+	(%WinnerTakesAllModeName as Label).add_theme_color_override("font_color", BattleUIStyle.on_dark())
+	(%WinnerTakesAllModePlayerCount as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("accent"))
 	(%MainMenuModeEyebrow as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("accent"))
 	(%MainMenuPreviewModeBadgeLabel as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
 	(%MainMenuModeRuleHint as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_muted"))
@@ -732,13 +732,13 @@ func refresh_ui_style() -> void:
 		_mode_details_description_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	# 车轮战两项候选设置与其他开局规则共享主题字体色；避免模式切换后回退到场景默认白字。
 	# 明置候选标签；精简的界面回归场景可能不含车轮战设置，缺失时只跳过表现覆盖。
-	var wheel_duel_face_up_candidate_label: Label = get_node_or_null("MainMenuSettingsPanel/SettingsVBox/WheelDuelFaceUpCandidateRow/WheelDuelFaceUpCandidateLabel") as Label
+	var wheel_duel_face_up_candidate_label: Label = find_child("WheelDuelFaceUpCandidateLabel", true, false) as Label
 	if wheel_duel_face_up_candidate_label != null:
 		wheel_duel_face_up_candidate_label.add_theme_font_override("font", ThemeDB.fallback_font)
 		wheel_duel_face_up_candidate_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 		wheel_duel_face_up_candidate_label.add_theme_color_override("font_shadow_color", BattleUIStyle.get_color("outer_background"))
 	# 暗置候选标签；与明置标签独立校验，避免局部场景缓存缺失其中一项时中断整页主题刷新。
-	var wheel_duel_face_down_candidate_label: Label = get_node_or_null("MainMenuSettingsPanel/SettingsVBox/WheelDuelFaceDownCandidateRow/WheelDuelFaceDownCandidateLabel") as Label
+	var wheel_duel_face_down_candidate_label: Label = find_child("WheelDuelFaceDownCandidateLabel", true, false) as Label
 	if wheel_duel_face_down_candidate_label != null:
 		wheel_duel_face_down_candidate_label.add_theme_font_override("font", ThemeDB.fallback_font)
 		wheel_duel_face_down_candidate_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
@@ -750,25 +750,25 @@ func refresh_ui_style() -> void:
 	_sfx_volume_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	_audio_muted_check_box.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	_audio_muted_check_box.add_theme_color_override("font_hover_color", BattleUIStyle.get_color("text_primary"))
-	_audio_muted_check_box.add_theme_color_override("font_pressed_color", BattleUIStyle.get_color("accent"))
+	_audio_muted_check_box.add_theme_color_override("font_pressed_color", BattleUIStyle.get_color("text_guide"))
 	_auto_identity_marking_checkbox.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	_auto_identity_marking_checkbox.add_theme_color_override("font_hover_color", BattleUIStyle.get_color("text_primary"))
-	_auto_identity_marking_checkbox.add_theme_color_override("font_pressed_color", BattleUIStyle.get_color("accent"))
+	_auto_identity_marking_checkbox.add_theme_color_override("font_pressed_color", BattleUIStyle.get_color("text_guide"))
 	_control_all_characters_checkbox.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	_control_all_characters_checkbox.add_theme_color_override("font_hover_color", BattleUIStyle.get_color("text_primary"))
-	_control_all_characters_checkbox.add_theme_color_override("font_pressed_color", BattleUIStyle.get_color("accent"))
+	_control_all_characters_checkbox.add_theme_color_override("font_pressed_color", BattleUIStyle.get_color("text_guide"))
 	_custom_character_assignment_checkbox.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	_custom_character_assignment_checkbox.add_theme_color_override("font_hover_color", BattleUIStyle.get_color("text_primary"))
-	_custom_character_assignment_checkbox.add_theme_color_override("font_pressed_color", BattleUIStyle.get_color("accent"))
+	_custom_character_assignment_checkbox.add_theme_color_override("font_pressed_color", BattleUIStyle.get_color("text_guide"))
 	_customize_ai_characters_checkbox.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	_customize_ai_characters_checkbox.add_theme_color_override("font_hover_color", BattleUIStyle.get_color("text_primary"))
-	_customize_ai_characters_checkbox.add_theme_color_override("font_pressed_color", BattleUIStyle.get_color("accent"))
+	_customize_ai_characters_checkbox.add_theme_color_override("font_pressed_color", BattleUIStyle.get_color("text_guide"))
 	_seat_compensation_checkbox.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	_seat_compensation_checkbox.add_theme_color_override("font_hover_color", BattleUIStyle.get_color("text_primary"))
-	_seat_compensation_checkbox.add_theme_color_override("font_pressed_color", BattleUIStyle.get_color("accent"))
+	_seat_compensation_checkbox.add_theme_color_override("font_pressed_color", BattleUIStyle.get_color("text_guide"))
 	_ai_uses_mulligan_checkbox.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
 	_ai_uses_mulligan_checkbox.add_theme_color_override("font_hover_color", BattleUIStyle.get_color("text_primary"))
-	_ai_uses_mulligan_checkbox.add_theme_color_override("font_pressed_color", BattleUIStyle.get_color("accent"))
+	_ai_uses_mulligan_checkbox.add_theme_color_override("font_pressed_color", BattleUIStyle.get_color("text_guide"))
 	_apply_slider_style(_ai_response_delay_slider)
 	_apply_slider_style(_game_speed_slider)
 	_apply_slider_style(_bgm_volume_slider)
@@ -1176,7 +1176,7 @@ func _build_mode_details_interface() -> void:
 	_mode_details_button.visible = false
 	_mode_details_button.z_index = MODE_DETAILS_BUTTON_Z_INDEX
 	_mode_details_button.custom_minimum_size = Vector2(104.0, 44.0)
-	_mode_details_button.position = Vector2(22.0, 20.0)
+	_mode_details_button.position = Vector2(294.0, 24.0)
 	_mode_details_button.size = Vector2(104.0, 44.0)
 	_mode_details_button.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	_mode_details_button.pressed.connect(_open_mode_details)
@@ -1829,7 +1829,7 @@ func _apply_top_navigation_button_style(button: Button, is_selected: bool) -> vo
 	if button == null:
 		return
 	# 顶部导航底色；高级黑金使用独立蓝黑语义，其他主题回退原有面板颜色。
-	var background_color: Color = BattleUIStyle.get_color("navigation_button", BattleUIStyle.get_color("panel"))
+	var background_color: Color = BattleUIStyle.get_color("panel") if is_selected else BattleUIStyle.get_color("navigation_button", BattleUIStyle.get_color("rail"))
 	# 顶部导航描边；当前页使用强调色，其他页使用普通边框色。
 	var border_color: Color = BattleUIStyle.get_color("accent") if is_selected else BattleUIStyle.get_color("border")
 	MENU_STYLE.apply_interaction_button(button, background_color, border_color, is_selected)
@@ -1875,10 +1875,10 @@ func _apply_mode_scroll_bar_style() -> void:
 	if _mode_scroll == null:
 		return
 	# 模式列表纵向滚动条；宽度由检查器参数统一控制，主题切换时原位重绘。
-	var scroll_bar: VScrollBar = _mode_scroll.get_v_scroll_bar()
+	var scroll_bar: HScrollBar = _mode_scroll.get_h_scroll_bar()
 	if scroll_bar == null:
 		return
-	BattleUIStyle.apply_main_menu_scroll_bar_style(scroll_bar, mode_scroll_bar_width)
+	preload("res://scripts/ui/ui_range_style.gd").apply(scroll_bar)
 
 
 ## 创建贴合纵向滚动范围两端的滑条样式；清除通用面板上下边距后，滑块在最小值和最大值处与轨道端点齐平。
@@ -1896,18 +1896,19 @@ func _ensure_mode_button_visible(button: Control) -> void:
 	_sync_mode_scroll_bar_value()
 
 
+## 横向模式陈列沿用旧入口名以兼容调用；滚轮、拖动与键盘焦点统一写入scroll_horizontal。
 ## 按指定像素值设置模式列表滚动位置，并立即把主题化纵向滑条更新到同一数值。
 func _set_mode_scroll_vertical(requested_value: float) -> void:
 	if _mode_scroll == null or not is_instance_valid(_mode_scroll):
 		return
 	# 当前模式列表滑条；其 max_value 包含内容总高，实际可滚动终点还要扣除可视 page 高度。
-	var scroll_bar: VScrollBar = _mode_scroll.get_v_scroll_bar()
+	var scroll_bar: HScrollBar = _mode_scroll.get_h_scroll_bar()
 	# 模式列表可滚动最大值；内容未超出窗口时固定为0，避免滚轮写入负值。
 	var maximum_scroll_value: float = maxf(scroll_bar.max_value - scroll_bar.page, 0.0) if scroll_bar != null else 0.0
 	# 规范化滚动目标；整数化与 ScrollContainer 的 scroll_vertical 类型保持一致。
 	var normalized_value: int = roundi(clampf(requested_value, 0.0, maximum_scroll_value))
 	_mode_scroll_syncing = true
-	_mode_scroll.scroll_vertical = normalized_value
+	_mode_scroll.scroll_horizontal = normalized_value
 	if scroll_bar != null:
 		scroll_bar.value = normalized_value
 	_mode_scroll_syncing = false
@@ -1918,7 +1919,7 @@ func _on_mode_scroll_bar_value_changed(value: float) -> void:
 	if _mode_scroll_syncing or _mode_scroll == null or not is_instance_valid(_mode_scroll):
 		return
 	_mode_scroll_syncing = true
-	_mode_scroll.scroll_vertical = roundi(value)
+	_mode_scroll.scroll_horizontal = roundi(value)
 	_mode_scroll_syncing = false
 
 
@@ -1927,7 +1928,7 @@ func _sync_mode_scroll_bar_value() -> void:
 	if _mode_scroll == null or not is_instance_valid(_mode_scroll):
 		return
 	# 当前 ScrollContainer 值；通过统一入口再次钳制并写入 VScrollBar，避免内容尺寸变化造成滑块脱节。
-	var current_scroll_value: float = _mode_scroll.scroll_vertical
+	var current_scroll_value: float = _mode_scroll.scroll_horizontal
 	_set_mode_scroll_vertical(current_scroll_value)
 
 

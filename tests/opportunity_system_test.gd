@@ -374,7 +374,7 @@ func _test_opportunity_card_hover() -> bool:
 	await get_tree().create_timer(card_view.hover_animation_seconds + 0.04, true).timeout
 	# 悬停状态样式；边框宽度应从4增加到5，背景按正式卡牌默认比例提亮。
 	var hovered_style: StyleBoxFlat = card_view.get_theme_stylebox("panel") as StyleBoxFlat
-	if not card_view.scale.is_equal_approx(Vector2.ONE * 1.06) or card_view.z_index != OpportunityCardView.HOVER_Z_INDEX or hovered_style == null or hovered_style.border_width_left != 5 or hovered_style.bg_color == normal_background_color or not card_view.pivot_offset.is_equal_approx(card_view.card_size * 0.5):
+	if not card_view.scale.is_equal_approx(Vector2.ONE * 1.06) or card_view.z_index != OpportunityCardView.HOVER_Z_INDEX or hovered_style == null or hovered_style.border_width_left != 2 or hovered_style.border_width_top != 7 or hovered_style.bg_color == normal_background_color or not card_view.pivot_offset.is_equal_approx(card_view.card_size * 0.5):
 		get_tree().paused = false
 		card_view.queue_free()
 		return _fail("opportunity_card_hover scale=%s z=%d border=%s" % [str(card_view.scale), card_view.z_index, str(hovered_style.border_width_left if hovered_style != null else -1)])

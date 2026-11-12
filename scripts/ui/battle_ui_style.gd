@@ -62,6 +62,13 @@ const DISABLED_BUTTON_FONT_COLOR: Color = Color("77736c")
 ## 主菜单浏览型纵向滚动条的默认宽度；模式列表、卡牌图鉴和资料滚动区共用该几何规格。
 const MAIN_MENU_SCROLL_BAR_WIDTH: float = 12.0
 
+## 深浅底分界；按Godot颜色亮度0至1判断，0.42让金色按钮使用深字、炭黑和危险色使用亮字。
+const INK_LUMINANCE_THRESHOLD: float = 0.42
+## 深背景的可读文字；暖白减少强光感，普通与按下状态共用以避免文字闪烁。
+const LIGHT_INK: Color = Color("faf6ed")
+## 浅背景的可读文字；炭黑用于米白和浅金表面，保持与正文一致。
+const DARK_INK: Color = Color("292824")
+
 ## 当前生效的 UI 风格标识；由桌面在初始化和设置变化时写入，组件不直接读取设置菜单节点。
 static var _active_style_id: String = UIStyleRegistry.DEFAULT_STYLE_ID
 
@@ -199,3 +206,13 @@ static func apply_interaction_button(button: Button, background_color: Color = U
 	button.add_theme_color_override("font_hover_color", get_color("button_hover_font"))
 	button.add_theme_color_override("font_pressed_color", get_color("button_pressed_font"))
 	button.add_theme_color_override("font_disabled_color", get_color("disabled_button_font"))
+
+
+## 返回实体背景上的可读文字色；用于炭黑导航、技能科技窗口和纸面按钮，避免浅色主题沿用深色底上的暗字。
+static func readable_ink(background: Color) -> Color:
+	return LIGHT_INK if background.get_luminance() < INK_LUMINANCE_THRESHOLD else DARK_INK
+
+
+## 返回深底覆盖文字；缺省亮字兼容旧主题，人物姓名和科技窗口不能使用浅色纸面正文语义。
+static func on_dark() -> Color:
+	return get_color("on_dark", Color("f7f1e5"))

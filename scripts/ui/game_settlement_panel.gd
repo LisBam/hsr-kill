@@ -125,7 +125,7 @@ func refresh_ui_style() -> void:
 		# 当前表头标签；缺失或替换为非标签节点时忽略，保持组件可嵌入旧场景测试。
 		var header_label: Label = header_variant as Label
 		if header_label != null:
-			header_label.add_theme_color_override("font_color", BattleUIStyle.get_color("accent"))
+			header_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_guide"))
 	for row_variant: Variant in _rows_container.get_children():
 		# 当前结算行；其面板背景和内部文字都需随主题即时刷新。
 		var row: HBoxContainer = row_variant as HBoxContainer
