@@ -155,6 +155,126 @@ func _run() -> void:
 	if confirm_button.disabled or (main_instance.get("_inline_selected_card_uids") as Array).size() != 2:
 		_fail("discard_complete_state")
 		return
+	# 弃牌自动选择按钮；两张弃牌的请求未达到手牌8张/弃置4张双门槛，必须保持隐藏。
+	var discard_auto_button: Button = main_instance.get("discard_auto_select_button") as Button
+	if discard_auto_button == null or discard_auto_button.visible:
+		_fail("discard_auto_button_below_threshold")
+		return
+	# 八张手牌夹具；使用不同牌名让AI牌值排序存在稳定差异，并避免与既有7001/7002断言冲突。
+	var auto_discard_hand: Array = [
+		{"uid":7101, "definition_id":"sha", "suit":"spade", "rank":7, "zone":"hand", "owner_id":0},
+		{"uid":7102, "definition_id":"shan", "suit":"heart", "rank":2, "zone":"hand", "owner_id":0},
+		{"uid":7103, "definition_id":"tao", "suit":"diamond", "rank":3, "zone":"hand", "owner_id":0},
+		{"uid":7104, "definition_id":"wuxiekeji", "suit":"club", "rank":4, "zone":"hand", "owner_id":0},
+		{"uid":7105, "definition_id":"juedou", "suit":"spade", "rank":1, "zone":"hand", "owner_id":0},
+		{"uid":7106, "definition_id":"guohechaiqiao", "suit":"club", "rank":3, "zone":"hand", "owner_id":0},
+		{"uid":7107, "definition_id":"shunshouqianyang", "suit":"diamond", "rank":5, "zone":"hand", "owner_id":0},
+		{"uid":7108, "definition_id":"wuzhongshengyou", "suit":"heart", "rank":7, "zone":"hand", "owner_id":0},
+	]
+	match_controller.state_changed.emit(_make_snapshot(auto_discard_hand, 130))
+	await get_tree().process_frame
+	# 八张手牌但只需弃置3张；弃置数量未达到4张门槛，按钮仍必须隐藏。
+	var auto_below_count_request: Dictionary = {
+		"request_id":130,
+		"chooser_id":0,
+		"title":"弃牌阶段",
+		"prompt":"请选择3张手牌弃置",
+		"candidates":_make_candidates(auto_discard_hand),
+		"min_select":3,
+		"max_select":3,
+		"allow_cancel":false,
+		"context":{"kind":"discard_phase", "discard_count":3},
+	}
+	main_instance.call("_on_card_choice_requested", auto_below_count_request)
+	if discard_auto_button.visible:
+		_fail("discard_auto_button_below_discard_count")
+		return
+	# 八张手牌且需弃置4张；按钮必须出现，并复用“不响应该锦囊”按钮的位置、尺寸和普通交互色。
+	var auto_discard_request: Dictionary = {
+		"request_id":131,
+		"chooser_id":0,
+		"title":"弃牌阶段",
+		"prompt":"请选择4张手牌弃置",
+		"candidates":_make_candidates(auto_discard_hand),
+		"min_select":4,
+		"max_select":4,
+		"allow_cancel":false,
+		"context":{"kind":"discard_phase", "discard_count":4},
+	}
+	main_instance.call("_on_card_choice_requested", auto_discard_request)
+	if not discard_auto_button.visible or discard_auto_button.text != "自动选择" or discard_auto_button.disabled:
+		_fail("discard_auto_button_visible")
+		return
+	if discard_auto_button.custom_minimum_size != end_play_button.custom_minimum_size \
+		or discard_auto_button.anchor_left != end_play_button.anchor_left \
+		or discard_auto_button.anchor_top != end_play_button.anchor_top \
+		or discard_auto_button.anchor_right != end_play_button.anchor_right \
+		or discard_auto_button.anchor_bottom != end_play_button.anchor_bottom \
+		or discard_auto_button.offset_left != end_play_button.offset_left \
+		or discard_auto_button.offset_top != end_play_button.offset_top \
+		or discard_auto_button.offset_right != end_play_button.offset_right \
+		or discard_auto_button.offset_bottom != end_play_button.offset_bottom:
+		_fail("discard_auto_button_reference_geometry")
+		return
+	# 自动选择按钮必须使用普通确定按钮色，而不是结束阶段的朱红危险色。
+	var auto_button_style: StyleBoxFlat = discard_auto_button.get_theme_stylebox("normal") as StyleBoxFlat
+	if auto_button_style == null or normal_confirm_style == null or not auto_button_style.bg_color.is_equal_approx(normal_confirm_style.bg_color):
+		_fail("discard_auto_button_normal_color")
+		return
+	# 玩家先手动选中高价值【桃】；自动选择只能补足剩余3张，不能取消该牌或让它失去选中位。
+	main_instance.call("_on_card_pressed", 7103)
+	if not (main_instance.get("_inline_selected_card_uids") as Array).has(7103):
+		_fail("discard_auto_preselect")
+		return
+	discard_auto_button.emit_signal("pressed")
+	# 自动选择不得提交请求：请求仍在界面中，中央确定按钮仍需玩家亲自点击。
+	if (main_instance.get("_inline_card_choice") as Dictionary).is_empty() or (main_instance.get("_inline_selected_card_uids") as Array).size() != 4 or not (main_instance.get("_inline_selected_card_uids") as Array).has(7103) or confirm_button.disabled or not discard_auto_button.disabled:
+		_fail("discard_auto_selection_state")
+		return
+	# AI预期补选牌；与按钮使用的同一牌值入口计算最低3张，确保自动选择确实走AI排序而不是按UID顺序。
+	var auto_snapshot: Dictionary = main_instance.get("_snapshot") as Dictionary
+	var auto_evaluator: NonameAIEvaluator = NonameAIEvaluator.new()
+	var card_values: Dictionary = {}
+	for card_data_variant: Variant in auto_discard_hand:
+		# 当前手牌快照；UID先排除玩家已选【桃】。
+		var hand_card: Dictionary = card_data_variant as Dictionary
+		var hand_uid: int = int(hand_card.get("uid", -1))
+		if hand_uid == 7103:
+			continue
+		card_values[hand_uid] = auto_evaluator.get_choice_card_value(auto_snapshot, auto_discard_request, hand_uid, 0)
+	# 可补选候选集合；按AI保留价值升序、同值按UID稳定排序。
+	var sortable_uids: Array[int] = []
+	for candidate_uid_variant: Variant in card_values.keys():
+		sortable_uids.append(int(candidate_uid_variant))
+	sortable_uids.sort_custom(func(first_uid: int, second_uid: int) -> bool:
+		var first_value: float = float(card_values.get(first_uid, 0.0))
+		var second_value: float = float(card_values.get(second_uid, 0.0))
+		return first_uid < second_uid if is_equal_approx(first_value, second_value) else first_value < second_value
+	)
+	var expected_auto_uids: Array[int] = []
+	for index: int in range(3):
+		expected_auto_uids.append(sortable_uids[index])
+	var selected_after_auto: Array = main_instance.get("_inline_selected_card_uids") as Array
+	for expected_uid: int in expected_auto_uids:
+		if not selected_after_auto.has(expected_uid):
+			_fail("discard_auto_ai_low_value_order")
+			return
+	# 调整手牌到4张同样属于纯手牌弃置；8张手牌需弃4张时按钮也必须可见。
+	var adjust_hand_request: Dictionary = {
+		"request_id":132,
+		"chooser_id":0,
+		"title":"调整手牌",
+		"prompt":"请选择4张手牌弃置",
+		"candidates":_make_candidates(auto_discard_hand),
+		"min_select":4,
+		"max_select":4,
+		"allow_cancel":false,
+		"context":{"kind":"adjust_hand_size", "target_count":4},
+	}
+	main_instance.call("_on_card_choice_requested", adjust_hand_request)
+	if not discard_auto_button.visible or discard_auto_button.disabled:
+		_fail("discard_auto_adjust_hand_visible")
+		return
 	# 同名字数选择测试【决斗】；其二字牌名与一字的【杀】【闪】不兼容。
 	var duel_data: Dictionary = {"uid":7003, "definition_id":"juedou", "suit":"spade", "rank":1, "zone":"hand", "owner_id":0}
 	match_controller.state_changed.emit(_make_snapshot([slash_data, dodge_data, duel_data], 120))
@@ -584,6 +704,17 @@ func _run() -> void:
 	await get_tree().process_frame
 	print("INLINE_HAND_CHOICE_PASS")
 	get_tree().quit(0)
+
+
+## 把整组手牌快照包装成统一选择候选；批量夹具只复用单张候选的公开字段口径。
+func _make_candidates(hand_cards: Array) -> Array:
+	# 候选结果；保持传入手牌的稳定顺序，便于测试复现。
+	var result: Array = []
+	for hand_card_variant: Variant in hand_cards:
+		# 当前手牌快照；只包含测试需要的实体字段。
+		var hand_card: Dictionary = hand_card_variant as Dictionary
+		result.append(_candidate(hand_card))
+	return result
 
 
 ## 把卡牌快照包装成统一选择候选；可见性与所有者字段和正式控制器输出一致。
