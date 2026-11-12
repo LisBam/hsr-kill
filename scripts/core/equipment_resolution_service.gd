@@ -40,7 +40,7 @@ func begin(player_id: int, card_uid: int, slot: String, reason: String = "equip"
 			member_uids.append(attachment_uid)
 	# 整组规则快照；不保存牌实体、角色对象或可变源数组。
 	var data: Dictionary = {"sequence_kind":"equipment_group", "target_id":player_id, "target_generation":target.character_generation, "card_uid":card_uid, "slot":slot, "reason":reason, "source":source, "transferring":transferring, "attachment_zone":attachment_zone, "member_uids":member_uids, "event_id":_host._current_rule_parent_event_id()}
-	# 前置逐张等待；换装旧牌在所有新成员前置通过后才尝试弃置。
+	# 前置逐张等待；换装旧牌在所有新成员前置通过后才尝试置入弃牌堆。
 	var steps: Array[Callable] = []
 	for member_index: int in range(member_uids.size()):
 		_movements.append(CardMoveResolutionService.new(_host))
@@ -105,10 +105,10 @@ func _replace_old_equipment(sequence: RuleStepSequence) -> void:
 	for movement: CardMoveResolutionService in _movements:
 		if not movement.can_commit(true):
 			return
-	# 旧栏实体；取消弃置或子效果填入新装备时，后一步自然拒绝安装。
+	# 旧栏实体；离区被取消或子效果填入新装备时，后一步自然拒绝安装。
 	var old_card: CardInstance = _host.get_equipment_card(int(sequence.context.target_id), str(sequence.context.slot))
 	if old_card != null:
-		_host.discard_equipment_slot(int(sequence.context.target_id), str(sequence.context.slot), true)
+		_host.begin_card_move(old_card.uid, "discard_pile", -1, "equipment_replacement", {"source_player_id":int(sequence.context.target_id), "allowed_source_zones":["equipment"]})
 
 
 ## 无规则派发的整组提交；先验证全部成员，再一次移动装备和粮，之后安装持续实例。
