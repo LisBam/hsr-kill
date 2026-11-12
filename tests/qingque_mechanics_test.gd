@@ -35,6 +35,10 @@ func _run() -> void:
 		return
 	if not _test_zimo_draw_branch_virtual_use():
 		return
+	if not _test_zimo_branch_a_source_gate():
+		return
+	if not _test_zimo_mode_card_pool():
+		return
 	if not _test_zimo_suit_branch_extends_limit():
 		return
 	if not _test_zimo_ai_and_locked_skill_uncertainty():
@@ -127,7 +131,7 @@ func _test_qingque_metadata() -> bool:
 	# 技能正文逐字校验；锁定技标签必须覆盖完整正文，禁止任何形式的改写。
 	var expected_duyi: String = "锁定技，你不可使用或打出手牌中的基本牌和锦囊牌。弃牌阶段开始时，你随机保留每种花色的手牌各一张并弃置其余的牌，然后跳过该阶段。"
 	var expected_qihe: String = "锁定技，当你成为其他角色使用伤害牌的目标时，若你手牌中有与此牌花色相同的牌，你随机弃置其中一张并令此牌对你无效。"
-	var expected_zimo: String = "出牌阶段，若你手牌中的牌花色数少于4，你可以摸一张牌，然后你视为使用一张【杀】或任意未以此法使用过的普通锦囊牌。若你手牌中的牌花色数不少于4，你可以弃置其中一种花色的所有手牌，并令此技能改为“出牌阶段限两次”直到回合结束。"
+	var expected_zimo: String = "出牌阶段，若你手牌中的牌花色数少于4，你可以从牌堆中随机获得一张与手牌花色均不同的牌，然后你视为使用一张【杀】或任意未以此法使用过的普通锦囊牌。若你手牌中的牌花色数不少于4，你可以弃置其中一种花色的所有手牌，并令此技能改为“出牌阶段限两次”直到回合结束。"
 	if str(duyi.get("description", "")) != expected_duyi or str(qihe.get("description", "")) != expected_qihe or str(zimo.get("description", "")) != expected_zimo:
 		return _fail("qingque_descriptions")
 	# 主动技入口配置；enable=phaseUse 保证只在出牌阶段点亮。
@@ -319,19 +323,22 @@ func _test_qihe_requires_same_suit() -> bool:
 	return true
 
 
-## 校验【自摸】分支A：摸一张牌后以虚拟手牌选择视为使用的牌，取消只重新选牌，普通锦囊进入整局使用记录。
+## 校验【自摸】分支A：从牌堆随机获得一张与手牌花色均不同的牌后，以虚拟手牌选择视为使用的牌，
+## 取消只重新选牌，普通锦囊进入整局使用记录。
 func _test_zimo_draw_branch_virtual_use() -> bool:
 	_reset_state(2)
-	# 手牌只有两种花色（少于4），因此必然进入分支A。
+	# 手牌只有黑桃与红桃两种花色（少于4），因此必然进入分支A。
 	var spade_card: CardInstance = _add_hand_card(0, "sha", "spade", 1)
 	var heart_card: CardInstance = _add_hand_card(0, "shan", "heart", 2)
+	# 牌堆：先放一张黑桃（与手牌花色相同，必须被过滤），再放三张梅花（分支A的唯一合法候选）。
+	# 必须在安装技能前准备牌堆，避免出牌请求在 can_activate 尚不成立时提前建立。
+	_add_draw_pile_card("tao", "spade", 3)
+	_add_draw_pile_card("tao", "club", 4)
+	_add_draw_pile_card("tao", "club", 5)
+	_add_draw_pile_card("tao", "club", 6)
 	if _install_skill(0, "zimo") == null:
 		return _fail("zimo_install")
 	var zimo: SkillDefinition = _controller.get_skill_instance(0, "zimo")
-	# 牌堆：分支A摸一张，【无中生有】再摸两张。
-	_add_draw_pile_card("tao", "club", 3)
-	_add_draw_pile_card("tao", "club", 4)
-	_add_draw_pile_card("tao", "club", 5)
 	if not zimo.can_activate():
 		return _fail("zimo_branch_a_blocked")
 	if not _activate_skill(0, "zimo"):
@@ -339,6 +346,14 @@ func _test_zimo_draw_branch_virtual_use() -> bool:
 	var owner: PlayerState = _controller.state.get_player(0)
 	if owner.hand.size() != 3:
 		return _fail("zimo_branch_a_draw=%d" % owner.hand.size())
+	# 获得牌的花色必须与发动前手牌的两种花色都不同；黑桃候选在牌堆中也不得被抽中。
+	var gained_card: CardInstance = null
+	for card: CardInstance in owner.hand:
+		if card.uid != spade_card.uid and card.uid != heart_card.uid:
+			gained_card = card
+			break
+	if gained_card == null or gained_card.suit != "club":
+		return _fail("zimo_branch_a_gain_suit=%s" % ("" if gained_card == null else gained_card.suit))
 	# 请求必须是虚拟手牌选牌请求：候选位于virtual_hand区、无花色、无点数。
 	var request: Dictionary = _controller._pending_card_choice.duplicate(true)
 	if str(request.get("choice_type", "")) != "card_target":
@@ -359,7 +374,7 @@ func _test_zimo_draw_branch_virtual_use() -> bool:
 			return _fail("zimo_candidate_suit_rank=%s" % str(card_data))
 		if int(candidate.get("uid", -1)) < SkillDefinition.VIRTUAL_HAND_CANDIDATE_UID_BASE:
 			return _fail("zimo_candidate_uid=%d" % int(candidate.get("uid", -1)))
-	# 取消：不重新摸牌，但会重新建立选牌请求。
+	# 取消：不重新获得牌，但会重新建立选牌请求。
 	if not _submit_pending_choice(0, [], [], false):
 		return false
 	if owner.hand.size() != 3:
@@ -381,13 +396,73 @@ func _test_zimo_draw_branch_virtual_use() -> bool:
 	# 原文没有“出牌阶段限一次”表述：基础状态不限次（-1），因此第一次视为使用之后仍可继续发动。
 	if int(zimo.call("_get_play_phase_limit")) != -1:
 		return _fail("zimo_base_limit=%d" % int(zimo.call("_get_play_phase_limit")))
+	# 当前手牌为黑桃/红桃/梅花/黑桃/梅花，缺方块；补一张方块使分支A仍有合法来源。
+	_add_draw_pile_card("tao", "diamond", 7)
 	if not zimo.can_activate():
 		return _fail("zimo_unlimited_blocked")
 	var effect_ids: Array = zimo.call("_get_effect_definition_ids") as Array
 	if effect_ids.has("wuzhong") or not effect_ids.has("sha"):
 		return _fail("zimo_effect_ids=%s" % str(effect_ids))
+	# 当前模式牌池过滤：身份模式默认牌堆不含【水淹七军】，候选不得出现该牌。
+	if effect_ids.has("shuiyanqijun"):
+		return _fail("zimo_mode_pool_shuiyanqijun")
 	if spade_card == null or heart_card == null:
 		return _fail("zimo_branch_a_cards")
+	return true
+
+
+## 校验【自摸】分支A的来源门槛：牌堆没有“与手牌花色均不同”的牌时不得发动，补入合法花色后才可发动。
+func _test_zimo_branch_a_source_gate() -> bool:
+	_reset_state(2)
+	# 手牌两种花色；牌堆先只放这两种花色，缺少可获得的异色牌。
+	_add_hand_card(0, "sha", "spade", 1)
+	_add_hand_card(0, "shan", "heart", 2)
+	_add_draw_pile_card("tao", "spade", 3)
+	_add_draw_pile_card("tao", "heart", 4)
+	if _install_skill(0, "zimo") == null:
+		return _fail("zimo_gate_install")
+	var zimo: SkillDefinition = _controller.get_skill_instance(0, "zimo")
+	if zimo.can_activate():
+		return _fail("zimo_gate_without_matching_suit")
+	# 补入一张梅花（与手牌两种花色均不同）；牌堆存在合法来源后 can_activate 才成立。
+	_add_draw_pile_card("tao", "club", 5)
+	if not zimo.can_activate():
+		return _fail("zimo_gate_with_matching_suit")
+	return true
+
+
+## 校验【自摸】“普通锦囊候选仅限当前模式牌库”：默认身份牌堆不含【水淹七军】，
+## 切换到包含该牌的模式牌库后候选才出现。
+func _test_zimo_mode_card_pool() -> bool:
+	# 默认身份模式牌堆的定义集合；必须含常规锦囊且不含未入堆的【水淹七军】。
+	var default_deck_ids: Array[String] = GameDatabase.get_deck_definition_ids("standard_162")
+	if default_deck_ids.is_empty() or default_deck_ids.has("shuiyanqijun") or not default_deck_ids.has("wuzhong"):
+		return _fail("zimo_default_deck_ids=%s" % str(default_deck_ids))
+	# 临时模式牌堆；仅在内存中挂到 GameDatabase，测试结束后恢复索引。
+	var test_deck_id: String = "zimo_mode_pool_test"
+	var previous_deck: Variant = GameDatabase.decks.get(test_deck_id)
+	GameDatabase.decks[test_deck_id] = {"cards":[["spade", 1, "sha"], ["heart", 1, "wuzhong"], ["club", 1, "shuiyanqijun"]]}
+	_reset_state(2)
+	_controller.state.deck_id = test_deck_id
+	_add_hand_card(0, "sha", "spade", 1)
+	_add_hand_card(0, "shan", "heart", 2)
+	if _install_skill(0, "zimo") == null:
+		if previous_deck == null:
+			GameDatabase.decks.erase(test_deck_id)
+		else:
+			GameDatabase.decks[test_deck_id] = previous_deck
+		return _fail("zimo_mode_pool_install")
+	var zimo: SkillDefinition = _controller.get_skill_instance(0, "zimo")
+	var effect_ids: Array = zimo.call("_get_effect_definition_ids") as Array
+	# 恢复索引；断言放在恢复之后，失败时也不会留下测试牌堆。
+	if previous_deck == null:
+		GameDatabase.decks.erase(test_deck_id)
+	else:
+		GameDatabase.decks[test_deck_id] = previous_deck
+	if not effect_ids.has("shuiyanqijun"):
+		return _fail("zimo_mode_pool_missing_shuiyanqijun=%s" % str(effect_ids))
+	if not effect_ids.has("wuzhong"):
+		return _fail("zimo_mode_pool_missing_wuzhong=%s" % str(effect_ids))
 	return true
 
 
@@ -415,6 +490,11 @@ func _test_zimo_suit_branch_extends_limit() -> bool:
 	if options.size() != 4:
 		return _fail("zimo_suit_options=%d" % options.size())
 	var owner: PlayerState = _controller.state.get_player(0)
+	# 分支A需要“与弃置红桃后的手牌（黑桃/梅花/方块）均不同”的花色，因此牌堆只能放红桃候选。
+	# 必须在花色选择提交前准备牌堆：提交会重建出牌请求，若此时没有合法来源，新请求不会包含【自摸】按钮。
+	_add_draw_pile_card("tao", "heart", 6)
+	_add_draw_pile_card("tao", "club", 7)
+	_add_draw_pile_card("tao", "club", 8)
 	if not _submit_pending_choice(0, [], [], true, "heart"):
 		return false
 	# 红桃全部被弃置；其它花色保留。
@@ -426,9 +506,6 @@ func _test_zimo_suit_branch_extends_limit() -> bool:
 	# 上限已扩展为2：同一回合内还能再发动一次；此时花色数降到3，走分支A。
 	if int(zimo.call("_get_play_phase_limit")) != 2:
 		return _fail("zimo_extended_limit=%d" % int(zimo.call("_get_play_phase_limit")))
-	_add_draw_pile_card("tao", "club", 6)
-	_add_draw_pile_card("tao", "club", 7)
-	_add_draw_pile_card("tao", "club", 8)
 	if not zimo.can_activate():
 		return _fail("zimo_extended_blocked")
 	if not _activate_skill(0, "zimo"):
@@ -458,6 +535,9 @@ func _test_zimo_ai_and_locked_skill_uncertainty() -> bool:
 	var spade_card: CardInstance = _add_hand_card(0, "sha", "spade", 1)
 	var heart_card: CardInstance = _add_hand_card(0, "shan", "heart", 2)
 	var club_card: CardInstance = _add_hand_card(0, "tao", "club", 3)
+	# 分支A还要能从牌堆获得一张缺失花色（方块）的牌；否则 can_activate 不成立，AI不应提供动作。
+	# 必须在安装技能前准备牌堆，避免出牌请求在 can_activate 尚不成立时提前建立。
+	_add_draw_pile_card("tao", "diamond", 4)
 	if _install_skill(0, "zimo") == null:
 		return _fail("zimo_ai_install")
 	var zimo: SkillDefinition = _controller.get_skill_instance(0, "zimo")
@@ -554,6 +634,9 @@ func _test_zimo_ordered_pair_candidate_pool() -> bool:
 	# 持有者手牌两种花色（少于4），必然走分支A；花色数不足时不会因为没有锦囊候选而整支跳过。
 	_add_hand_card(0, "sha", "spade", 1)
 	_add_hand_card(0, "shan", "heart", 2)
+	# 分支A从牌堆随机获得一张异色牌；牌堆留一张梅花候选，保证获得动作能完成。
+	# 必须在安装技能前准备牌堆，避免出牌请求在 can_activate 尚不成立时提前建立。
+	_add_draw_pile_card("tao", "club", 4)
 	if _install_skill(0, "zimo") == null:
 		return _fail("zimo_pool_install")
 	# 一号位是全场唯一持武器角色；持有者与二号位都没有武器，只可能充当第二个位置。
@@ -561,8 +644,6 @@ func _test_zimo_ordered_pair_candidate_pool() -> bool:
 	weapon_card.zone = "equipment"
 	weapon_card.owner_id = 1
 	_controller.state.get_player(1).equipment["weapon"] = weapon_card
-	# 分支A先摸一张牌；牌堆留一张保证摸牌结算本身不因空堆中断。
-	_add_draw_pile_card("tao", "club", 4)
 	if not _activate_skill(0, "zimo"):
 		return false
 	var request: Dictionary = _controller._pending_card_choice.duplicate(true)

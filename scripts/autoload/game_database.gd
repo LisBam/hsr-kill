@@ -460,6 +460,28 @@ func get_deck_cards(deck_id: String) -> Array:
 	return (deck_definition.get("cards", []) as Array).duplicate(true)
 
 
+## 返回指定牌堆包含的全部卡牌定义 ID（按牌堆内首次出现顺序去重）。
+## 用途：内容层判断“当前模式的牌”时，以本局 `GameState.deck_id` 对应的牌堆为准；
+## 未进入该牌堆的扩展定义（例如身份模式默认牌堆之外的【水淹七军】）不属于当前模式。
+func get_deck_definition_ids(deck_id: String) -> Array[String]:
+	# 结果列表；保持牌堆原始顺序，便于调用方生成稳定候选或展示顺序。
+	var result: Array[String] = []
+	# 已登记定义集合；同一牌名在牌堆中可能有多个花色点数，只保留一次。
+	var seen_definition_ids: Dictionary = {}
+	for row_variant: Variant in get_deck_cards(deck_id):
+		# 牌堆条目；格式不完整时跳过，避免脏数据污染查询结果。
+		var row: Array = row_variant as Array
+		if row.size() < 3:
+			continue
+		# 当前条目引用的稳定卡牌定义 ID；空值不作为有效牌名。
+		var definition_id: String = str(row[2])
+		if definition_id.is_empty() or seen_definition_ids.has(definition_id):
+			continue
+		seen_definition_ids[definition_id] = true
+		result.append(definition_id)
+	return result
+
+
 ## 扫描并登记全部角色持续效果源码；效果实例挂在角色身上，因此只登记脚本与元数据，不建立持有者索引。
 func _load_player_effects() -> void:
 	for script_path: String in _list_gd_scripts(PLAYER_EFFECTS_DIRECTORY):

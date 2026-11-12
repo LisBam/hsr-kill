@@ -1,7 +1,7 @@
 extends SkillDefinition
 
 ## 【自摸】技能源码。出牌阶段主动技，按当前手牌花色数分成两条互斥分支：
-## 分支A（手牌花色数少于4）：摸一张牌，然后视为使用一张【杀】或任意本局尚未以此法使用过的普通锦囊牌。
+## 分支A（手牌花色数少于4）：从牌堆中随机获得一张与手牌花色均不同的牌，然后视为使用一张【杀】或任意本局尚未以此法使用过的普通锦囊牌。
 ## 分支B（手牌花色数不少于4）：弃置一种花色的所有手牌，并把本技能改为“出牌阶段限两次”直到回合结束。
 ##
 ## 两条分支共用同一个发动计数：原文**没有**“出牌阶段限一次”表述，因此基础状态下不限次；
@@ -26,8 +26,11 @@ const SUIT_SYMBOLS: Dictionary = {"spade":"♠", "heart":"♥", "club":"♣", "d
 ## 花色中文名；仅用于分支B的内联选项文本。
 const SUIT_NAMES: Dictionary = {"spade":"黑桃", "heart":"红桃", "club":"梅花", "diamond":"方块"}
 
-## 分支A的固定摸牌数；数值1来自原文“摸一张牌”。
+## 分支A的固定获得牌数；数值1来自原文“获得一张”。
 const DRAW_COUNT: int = 1
+
+## 分支A随机获得牌的随机历史类型；写入 state.random_history，保证固定种子回放与测试复现同一抽取结果。
+const DRAW_GAIN_RANDOM_HISTORY_KIND: String = "zimo_suit_random_gain"
 
 ## 视为使用的基本牌牌名；原文为“一张【杀】”，固定使用普通【杀】定义。
 const SLASH_DEFINITION_ID: String = "sha"
@@ -54,7 +57,7 @@ const CHOICE_PICK_SUIT: String = "zimo_pick_suit"
 const SELECTION_TITLE: String = "自摸"
 
 ## 分支A的请求提示；说明候选来源与目标规则，避免玩家误以为真的获得了这些牌。
-const SELECTION_PROMPT: String = "请选择视为使用的牌，并为其指定目标"
+const SELECTION_PROMPT: String = "请选择视为使用的牌"
 
 ## 分支B的请求提示；明确弃置范围是该花色的全部手牌。
 const SUIT_PROMPT: String = "请选择要弃置全部手牌的花色"
@@ -86,7 +89,7 @@ const VIRTUAL_CARD_COLOR: String = "none"
 
 ## 请求上下文里的取消按钮隐藏声明键；置位后界面直接暗置取消按钮，而不是留下一个“可见可按但点了没反应”的入口。
 ##
-## 分支A一旦发动就已经摸过牌，取消只会被 _continue_effect_selection 重新打开同一询问，
+## 分支A一旦发动就已经获得过牌，取消只会被 _continue_effect_selection 重新打开同一询问，
 ## 因此这个窗口在语义上不存在“放弃”出口：规则层用 allow_cancel=false 表达“取消不是合法提交”，
 ## 本声明进一步要求界面不要绘制这个无效入口。
 const HIDE_CANCEL_BUTTON_KEY: String = "hide_cancel_button"
@@ -106,7 +109,7 @@ func _init() -> void:
 		"trigger":"active/phaseUse",
 		"enable":"phaseUse",
 		"ui_enabled":true,
-		"description":"出牌阶段，若你手牌中的牌花色数少于4，你可以摸一张牌，然后你视为使用一张【杀】或任意未以此法使用过的普通锦囊牌。若你手牌中的牌花色数不少于4，你可以弃置其中一种花色的所有手牌，并令此技能改为“出牌阶段限两次”直到回合结束。",
+		"description":"出牌阶段，若你手牌中的牌花色数少于4，你可以从牌堆中随机获得一张与手牌花色均不同的牌，然后你视为使用一张【杀】或任意未以此法使用过的普通锦囊牌。若你手牌中的牌花色数不少于4，你可以弃置其中一种花色的所有手牌，并令此技能改为“出牌阶段限两次”直到回合结束。",
 	})
 
 
@@ -135,7 +138,10 @@ func can_activate(_context: Dictionary = {}) -> bool:
 	if play_phase_limit >= 0 and _used_this_play_phase >= play_phase_limit:
 		return false
 	if get_hand_suit_count(owner) < SUIT_COUNT_THRESHOLD:
-		# 分支A：至少要有一种“视为使用”的完整合法选择，否则发动后只能白摸一张牌。
+		# 分支A：必须先存在“花色与当前手牌均不同”的摸牌堆实体，否则无法完成原文的“获得一张”。
+		if _collect_draw_gain_candidate_uids(owner).is_empty():
+			return false
+		# 分支A：同时至少要有一种“视为使用”的完整合法选择，否则发动后只能白得一张牌。
 		return not _build_effect_selection_data().is_empty()
 	# 分支B：至少要有一张实体花色的手牌可以弃置。
 	return not _collect_suit_groups(owner).is_empty()
@@ -148,7 +154,7 @@ func activate(_context: Dictionary = {}) -> String:
 	# 技能持有者；can_activate 已确认存在且存活。
 	var owner: PlayerState = get_owner_skill_player().get_state()
 	if get_hand_suit_count(owner) < SUIT_COUNT_THRESHOLD:
-		_activate_draw_branch()
+		_activate_draw_branch(owner)
 		return ""
 	_activate_suit_branch(owner)
 	return ""
@@ -173,15 +179,61 @@ func get_hand_suit_count(owner: PlayerState) -> int:
 	return suits.size()
 
 
-## 分支A：先摸一张牌，再进入“选牌并选目标”的虚拟手牌交互。
+## 分支A：先从摸牌堆随机获得一张与当前手牌花色均不同的牌，再进入“选牌并选目标”的虚拟手牌交互。
 ##
 ## 计次时机：发动瞬间即计入本阶段已发动次数。基础状态不限次，但计数始终保留，
 ## 因此本回合稍后完成分支B改写上限时，这次发动同样占掉“限两次”中的一次；
-## 之后的取消或目标失效只会重新选牌，既不重新摸牌也不再次计次。
-func _activate_draw_branch() -> void:
+## 之后的取消或目标失效只会重新选牌，既不重新获得牌也不再次计次。
+## 获得动作本身被前置时机取消或失败时，不打开“视为使用”窗口，本次发动仍按已尝试消耗计数。
+func _activate_draw_branch(owner: PlayerState) -> void:
 	_used_this_play_phase += 1
-	host.call("draw", owner_player_id, DRAW_COUNT)
+	# 候选牌 UID；只包含花色与当前手牌所有实体花色均不同的摸牌堆实体。
+	var candidate_uids: Array[int] = _collect_draw_gain_candidate_uids(owner)
+	if candidate_uids.is_empty():
+		return
+	# 权威随机下标；随机历史记录本次抽取的候选规模与稳定上下文，供回放和测试复现。
+	var picked_index: int = int(host.call("pick_random_candidate_index", candidate_uids.size(), DRAW_GAIN_RANDOM_HISTORY_KIND, {"skill_id":get_id(), "owner_player_id":owner_player_id, "candidate_count":candidate_uids.size(), "gain_count":DRAW_COUNT}))
+	if picked_index < 0 or picked_index >= candidate_uids.size():
+		return
+	# 被抽中的摸牌堆实体 UID；后续获得端口会再次校验其仍在摸牌堆。
+	var picked_card_uid: int = candidate_uids[picked_index]
+	# 步骤数组：先等待获得动作完整结束，确认牌真的进入手牌后才重新打开虚拟选牌。
+	var steps: Array[Callable] = []
+	steps.append(func(sequence: RuleStepSequence) -> void:
+		sequence.effect_result = host.call("gain_card_to_hand_by_uid", owner_player_id, picked_card_uid, get_id())
+	)
+	steps.append(_continue_after_draw_gain)
+	run_steps(steps)
+
+
+## 分支A获得牌后的续接：只有获得动作实际成功才打开“视为使用”选择。
+func _continue_after_draw_gain(sequence: RuleStepSequence) -> void:
+	if sequence == null or sequence.effect_result == null:
+		return
+	# 获得结果句柄；必须是已完成的 CardMoveResolutionService，且实际进入手牌。
+	var movement: CardMoveResolutionService = sequence.effect_result as CardMoveResolutionService
+	if movement == null or not movement.completed:
+		return
+	if int(movement.count) <= 0 or not bool(movement.result.get("success", false)):
+		return
 	_reopen_effect_selection()
+
+
+## 返回摸牌堆中“花色与当前手牌所有实体花色均不同”的候选 UID；无花色牌不参与。
+func _collect_draw_gain_candidate_uids(owner: PlayerState) -> Array[int]:
+	# 候选结果；顺序沿用摸牌堆数组顺序，随机下标因此可复现。
+	var result: Array[int] = []
+	if owner == null or host == null or host.state == null:
+		return result
+	# 当前手牌已有的实体花色集合；无花色手牌不计入。
+	var hand_suits: Dictionary = {}
+	for card: CardInstance in owner.hand:
+		if CARD_SUITS.has(card.suit):
+			hand_suits[card.suit] = true
+	for card: CardInstance in host.state.draw_pile:
+		if CARD_SUITS.has(card.suit) and not hand_suits.has(card.suit):
+			result.append(card.uid)
+	return result
 
 
 ## 分支B：弹出包含每种花色的内联选项，玩家选择一种后弃置该花色全部手牌并把上限改写为2。
@@ -203,18 +255,18 @@ func _activate_suit_branch(owner: PlayerState) -> void:
 	request_control_selection(SELECTION_TITLE, SUIT_PROMPT, options, true, {"kind":CHOICE_PICK_SUIT, "suit_card_counts":suit_card_counts})
 
 
-## 建立或重新建立分支A的虚拟手牌选择请求；取消与目标失效都会回到这里且不重新摸牌。
+## 建立或重新建立分支A的虚拟手牌选择请求；取消与目标失效都会回到这里且不重新获得牌。
 func _reopen_effect_selection() -> void:
 	# 当前可用效果数据；每次重新枚举都会重新过滤“本局已用过”的牌名与失效目标。
 	var selection_data: Dictionary = _build_effect_selection_data()
 	var entries: Array[Dictionary] = selection_data.get("entries", []) as Array[Dictionary]
 	if entries.is_empty():
-		# 已经没有可视为使用的牌：视为使用规则整体跳过，本次发动只结算摸牌。
+		# 已经没有可视为使用的牌：视为使用规则整体跳过，本次发动只结算获得牌。
 		_refresh_display_description()
 		return
 	# 目标数量范围：单目标牌为1，【借刀杀人】等需要至少两名目标的牌由各自组合映射精确约束。
 	# allow_cancel 保持 true：取消在本技能里是一个**有定义**的响应——它表示“重新选牌”，规则层照此重开同一询问，
-	# 既不重新摸牌也不额外计次，因此规则层必须继续接受它（网络端提交空响应也不会让流程失控）。
+	# 既不重新获得牌也不额外计次，因此规则层必须继续接受它（网络端提交空响应也不会让流程失控）。
 	# 但界面上这个按钮对玩家毫无意义（点它只会看到同一个窗口再次出现），
 	# 因此额外声明 HIDE_CANCEL_BUTTON_KEY 让界面直接暗置它，而不是留下“可见可按但点了没反应”的无效入口。
 	# 上下文声明 ai_choice_skill_scored：本请求的收益完全由 score_ai_choice 表达，
@@ -262,6 +314,8 @@ func _get_effect_definition_ids() -> Array[String]:
 	result.append(SLASH_DEFINITION_ID)
 	# 本局已以此法使用过的普通锦囊牌名；【杀】不写入该名单，因此可以重复使用。
 	var used_names: Array = host.call("get_skill_used_card_names", owner_player_id, get_id()) as Array
+	# 当前模式牌堆包含的牌名集合；以本局 state.deck_id 为准，不能拿 GameDatabase.cards 全集代替。
+	var mode_definition_ids: Dictionary = _get_current_mode_definition_ids()
 	# 全部已登记牌名；排序后遍历保证候选顺序在本地、AI与网络三端完全一致。
 	var all_card_ids: Array = GameDatabase.cards.keys()
 	all_card_ids.sort()
@@ -274,9 +328,26 @@ func _get_effect_definition_ids() -> Array[String]:
 		var definition: Dictionary = GameDatabase.get_card(card_id)
 		if str(definition.get("type", "")) != TRICK_TYPE or str(definition.get("subtype", "")) != NORMAL_TRICK_SUBTYPE:
 			continue
+		# 模式过滤：只允许当前对局牌堆实际包含的普通锦囊。
+		# 例：身份模式默认牌堆 standard_162 不含【水淹七军】，它不得进入本技能候选。
+		if not mode_definition_ids.has(card_id):
+			continue
 		if bool(definition.get("delayed", false)) or used_names.has(card_id):
 			continue
 		result.append(card_id)
+	return result
+
+
+## 返回当前模式牌堆包含的全部卡牌定义 ID 集合；未知或缺省牌堆返回空集合。
+func _get_current_mode_definition_ids() -> Dictionary:
+	# 结果集合；只做成员判断，因此用字典而不是数组。
+	var result: Dictionary = {}
+	if host == null or host.state == null:
+		return result
+	# 本局牌堆配置标识；开局时由 MatchController 写入，存档恢复沿用同一值。
+	var deck_id: String = str(host.state.deck_id)
+	for definition_id: String in GameDatabase.get_deck_definition_ids(deck_id):
+		result[definition_id] = true
 	return result
 
 
@@ -366,7 +437,7 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 	return false
 
 
-## 恢复分支A的选牌与目标；取消或组合失效时重新选牌，不重新摸牌、不额外计次。
+## 恢复分支A的选牌与目标；取消或组合失效时重新选牌，不重新获得牌、不额外计次。
 func _continue_effect_selection(context: Dictionary, response: ChoiceResponse) -> void:
 	if not response.confirmed or response.card_ids.size() != 1:
 		_reopen_effect_selection()
@@ -439,7 +510,7 @@ func _refresh_display_description() -> void:
 ## 为AI枚举本技能在当前出牌阶段的候选动作；只要 can_activate 成立就提供一个无参数技能动作。
 ##
 ## 基础状态不限次，因此AI在自己回合内会持续提供该动作，直到条件不再成立为止：
-## 可用普通锦囊被逐个用尽、花色数达到4而转入分支B（分支B之后上限被改写为2）、
+## 可用普通锦囊被逐个用尽、摸牌堆已没有与手牌花色不同的牌、花色数达到4而转入分支B（分支B之后上限被改写为2）、
 ## 或不再存在带合法目标的候选项。全局的每回合AI动作上限是兜底保护，本技能不再自设上限。
 func append_play_phase_actions(result: Array[Dictionary]) -> void:
 	if not can_activate():
