@@ -275,6 +275,44 @@ func _run() -> void:
 	if not discard_auto_button.visible or discard_auto_button.disabled:
 		_fail("discard_auto_adjust_hand_visible")
 		return
+	# 技能弃牌可混合手牌和装备；玩家先选装备，AI只能补齐与该装备兼容的组合。
+	var mixed_weapon: Dictionary = {"uid":7190, "definition_id":"qinggang", "suit":"spade", "rank":6, "zone":"equipment", "owner_id":0}
+	match_controller.state_changed.emit(_make_snapshot(auto_discard_hand, 133, {"weapon":mixed_weapon}))
+	await get_tree().process_frame
+	var mixed_candidates: Array = _make_candidates(auto_discard_hand)
+	mixed_candidates.append(_candidate(mixed_weapon))
+	var skill_discard_request: Dictionary = {
+		"request_id":133, "chooser_id":0, "choice_type":"card", "title":"蝶影", "prompt":"请弃置4张牌",
+		"candidates":mixed_candidates, "min_select":4, "max_select":4, "allow_cancel":false,
+		"context":{"kind":"dieying_discard", "ai_discard_cost":true, "valid_card_combinations":[[7190, 7101, 7102, 7103], [7190, 7104, 7105, 7106]]},
+	}
+	main_instance.call("_on_card_choice_requested", skill_discard_request)
+	if not discard_auto_button.visible:
+		_fail("discard_auto_skill_visible")
+		return
+	main_instance.call("_on_equipment_pressed", 7190)
+	discard_auto_button.emit_signal("pressed")
+	var mixed_selected: Array = main_instance.get("_inline_selected_card_uids") as Array
+	if mixed_selected.size() != 4 or not mixed_selected.has(7190) or confirm_button.disabled:
+		_fail("discard_auto_skill_selection")
+		return
+	var first_combination: Array = [7190, 7101, 7102, 7103]
+	var second_combination: Array = [7190, 7104, 7105, 7106]
+	for selected_uid: int in mixed_selected:
+		if not first_combination.has(selected_uid):
+			first_combination.clear()
+		if not second_combination.has(selected_uid):
+			second_combination.clear()
+	if first_combination.is_empty() and second_combination.is_empty():
+		_fail("discard_auto_skill_combination")
+		return
+	var ordinary_request: Dictionary = skill_discard_request.duplicate(true)
+	ordinary_request["request_id"] = 134
+	ordinary_request["context"] = {"kind":"ordinary_card_selection"}
+	main_instance.call("_on_card_choice_requested", ordinary_request)
+	if discard_auto_button.visible:
+		_fail("discard_auto_non_discard_visible")
+		return
 	# 同名字数选择测试【决斗】；其二字牌名与一字的【杀】【闪】不兼容。
 	var duel_data: Dictionary = {"uid":7003, "definition_id":"juedou", "suit":"spade", "rank":1, "zone":"hand", "owner_id":0}
 	match_controller.state_changed.emit(_make_snapshot([slash_data, dodge_data, duel_data], 120))

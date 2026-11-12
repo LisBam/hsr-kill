@@ -74,7 +74,7 @@ func continue_selection(context: Dictionary, response: ChoiceResponse) -> bool:
 			# 摸牌后候选；至少包含刚摸到的牌，装备也可作为“牌”支付弃置数量。
 			var candidates: Array[Dictionary] = host.call("get_hand_equipment_candidates", owner_player_id, owner_player_id) as Array[Dictionary]
 			var required_count: int = mini(draw_count, candidates.size())
-			request_card_selection("蝶影", "请弃置%d张牌" % required_count, candidates, required_count, required_count, false, {"kind":"dieying_discard"})
+			request_card_selection("蝶影", "请弃置%d张牌" % required_count, candidates, required_count, required_count, false, {"kind":"dieying_discard", "ai_discard_cost":true})
 		return true
 	if choice_kind == "dieying_discard":
 		if response != null:
