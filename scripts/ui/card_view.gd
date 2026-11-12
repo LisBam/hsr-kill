@@ -494,7 +494,8 @@ func _refresh_visual_state() -> void:
 	if _selection_feedback == null:
 		_selection_feedback = SELECTION_FEEDBACK.new()
 		_selection_feedback.name = "SelectionFeedback"
-		_selection_feedback.z_index = 10
+		# 反馈与牌面保持相同的相对层级，按牌面自身的层级和节点顺序被相邻手牌遮挡。
+		_selection_feedback.z_index = 0
 		add_child(_selection_feedback)
 	_selection_feedback.configure(Vector2(card_width, card_height), is_card_selected, BattleUIStyle.get_color("accent"), _is_hovered and is_interactable)
 

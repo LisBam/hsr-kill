@@ -90,6 +90,18 @@ func _run() -> void:
 		return
 	target.set_target_state(true, true, true)
 	card.set_selected_state(true)
+	# 相邻选中手牌必须以整张牌为单位排序，左侧选中框不得越过右侧牌面。
+	var next_card: CardView = (main.get("_card_views") as Dictionary).get(802) as CardView
+	if next_card == null:
+		_check(false, "缺少相邻手牌")
+		get_tree().quit(1)
+		return
+	next_card.set_selected_state(true)
+	(card.get_parent() as DecadeHandContainer).layout_cards_now()
+	# 左侧手牌的选中装饰；其相对层级必须与所属牌面一致，才能被右侧牌正常遮挡。
+	var card_feedback: Control = card.get_node("SelectionFeedback") as Control
+	_check(card_feedback.z_as_relative and card_feedback.z_index == 0 and card.z_index < next_card.z_index, "选中框越过相邻手牌层级")
+	_check(card_feedback.mouse_filter == Control.MOUSE_FILTER_IGNORE, "手牌选中框拦截输入")
 	# 选中组件和原始节点位置；边缘动画不能移动武将或改变原输入矩形。
 	var feedback: Control = target.get_node("SelectionFeedback") as Control
 	# 当前Tween；重复快照不应重新创建它。
