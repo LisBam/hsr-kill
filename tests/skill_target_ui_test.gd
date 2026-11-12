@@ -208,6 +208,37 @@ func _run() -> void:
 	if selection_panel.visible or not interaction_panel.visible or confirm_button.text != "1.竖直目标武将牌" or cancel_button.text != "2.弃置目标手牌" or inline_cancel_button == null or not inline_cancel_button.visible or local_player_view.is_target_selection_active or not local_player_view.modulate.is_equal_approx(Color.WHITE):
 		_fail("bingfeng_inline_control")
 		return
+	# 两个实际选项必须共用主操作颜色，真正的放弃按钮继续使用次要颜色。
+	var primary_style: StyleBoxFlat = confirm_button.get_theme_stylebox("normal") as StyleBoxFlat
+	var secondary_style: StyleBoxFlat = cancel_button.get_theme_stylebox("normal") as StyleBoxFlat
+	var cancel_style: StyleBoxFlat = inline_cancel_button.get_theme_stylebox("normal") as StyleBoxFlat
+	if primary_style == null or secondary_style == null or cancel_style == null or not primary_style.bg_color.is_equal_approx(secondary_style.bg_color) or secondary_style.bg_color.is_equal_approx(cancel_style.bg_color):
+		_fail("inline_control_option_colors")
+		return
+	main_instance.call("_apply_ui_style")
+	secondary_style = cancel_button.get_theme_stylebox("normal") as StyleBoxFlat
+	if secondary_style == null or not primary_style.bg_color.is_equal_approx(secondary_style.bg_color):
+		_fail("inline_control_option_theme_refresh")
+		return
+	# 只有一个选项时第二个位置重新承担取消，不能残留主操作颜色。
+	var single_control_request: Dictionary = bingfeng_control_request.duplicate(true)
+	single_control_request["request_id"] = 26
+	single_control_request["control_options"] = [{"id":"only", "label":"确认选项"}]
+	main_instance.call("_on_card_choice_requested", single_control_request)
+	secondary_style = cancel_button.get_theme_stylebox("normal") as StyleBoxFlat
+	if cancel_button.text != "取消" or secondary_style == null or not secondary_style.bg_color.is_equal_approx(cancel_style.bg_color):
+		_fail("inline_control_cancel_color_restore")
+		return
+	# 请求明确把第二项声明为取消时，即使存在两项也仍应采用取消样式。
+	var declared_cancel_request: Dictionary = bingfeng_control_request.duplicate(true)
+	declared_cancel_request["request_id"] = 27
+	declared_cancel_request["control_options"] = [{"id":"only", "label":"确认选项"}, {"id":"cancel", "label":"取消"}]
+	declared_cancel_request["context"] = {"control_cancel_option_id":"cancel"}
+	main_instance.call("_on_card_choice_requested", declared_cancel_request)
+	secondary_style = cancel_button.get_theme_stylebox("normal") as StyleBoxFlat
+	if secondary_style == null or not secondary_style.bg_color.is_equal_approx(cancel_style.bg_color):
+		_fail("inline_control_declared_cancel_color")
+		return
 	# 秘策式目标文字选项复合请求；未选择目标前两个实际阶段按钮必须保持禁用，真正取消按钮仍可使用。
 	var target_control_request: Dictionary = {
 		"request_id":25,

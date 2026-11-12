@@ -3879,7 +3879,7 @@ func _apply_ui_style() -> void:
 	error_label.add_theme_color_override("font_color", BattleUIStyle.get_color("danger"))
 	BATTLE_STYLE.apply_interaction_button(use_button)
 	BATTLE_STYLE.apply_interaction_button(settlement_button)
-	BATTLE_STYLE.apply_interaction_button(%CancelButton, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
+	_refresh_inline_secondary_button_style()
 	if game_settlement_panel != null and is_instance_valid(game_settlement_panel):
 		game_settlement_panel.refresh_ui_style()
 	if opportunity_choice_panel != null and is_instance_valid(opportunity_choice_panel):
@@ -5857,6 +5857,7 @@ func _refresh_selection_text() -> void:
 	_clear_inline_control_extra_option_buttons()
 	_inline_control_primary_option_id = ""
 	_inline_control_secondary_option_id = ""
+	_refresh_inline_secondary_button_style()
 	if _zhenqi_cancel_button != null and is_instance_valid(_zhenqi_cancel_button):
 		_zhenqi_cancel_button.visible = false
 	use_button.visible = true
@@ -6232,6 +6233,7 @@ func _refresh_inline_control_choice_text() -> void:
 	cancel_button.custom_minimum_size = ACTION_BUTTON_MINIMUM_SIZE
 	if control_options.size() >= 2:
 		_inline_control_secondary_option_id = str((control_options[1] as Dictionary).get("id", ""))
+		_refresh_inline_secondary_button_style()
 		cancel_button.visible = true
 		cancel_button.text = str((control_options[1] as Dictionary).get("label", _inline_control_secondary_option_id))
 		cancel_button.disabled = _inline_control_secondary_option_id.is_empty() or not _is_inline_control_option_submittable(_inline_control_secondary_option_id)
@@ -6254,6 +6256,15 @@ func _refresh_inline_control_choice_text() -> void:
 	if allow_cancel and control_options.size() >= 2 and declared_cancel_option_id.is_empty():
 		_append_inline_control_cancel_button()
 	_refresh_component_states()
+
+
+## 按第二个位置的语义应用主题；实际选项使用主操作样式，真正取消保持次要样式。
+## 询问结束或主题切换时也调用，避免复用按钮残留上一次询问的颜色。
+func _refresh_inline_secondary_button_style() -> void:
+	if not _inline_control_secondary_option_id.is_empty() and _inline_control_secondary_option_id != _get_inline_control_cancel_option_id():
+		BATTLE_STYLE.apply_interaction_button(%CancelButton)
+	else:
+		BATTLE_STYLE.apply_interaction_button(%CancelButton, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
 
 
 ## 判断文字选项询问的手牌维度是否已经满足；未声明手牌数量范围的控制请求直接返回true。
