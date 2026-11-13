@@ -471,19 +471,19 @@ func _build_notice_banner() -> void:
 func refresh_ui_style() -> void:
 	if not is_node_ready():
 		return
-	_character_shade.color = BattleUIStyle.get_color("shade", Color(0.0, 0.0, 0.0, 0.82))
-	_hover_panel.add_theme_stylebox_override("panel", BATTLE_STYLE.make_inset_panel(BattleUIStyle.get_color("metal_panel"), BattleUIStyle.get_color("border"), 2, 6))
-	_character_panel.add_theme_stylebox_override("panel", BATTLE_STYLE.make_inset_panel(BattleUIStyle.get_color("selection_panel"), BattleUIStyle.get_color("border"), 2, 6))
+	_character_shade.color = BATTLE_STYLE.get_color("shade", Color(0.0, 0.0, 0.0, 0.82))
+	_hover_panel.add_theme_stylebox_override("panel", BATTLE_STYLE.make_inset_panel(BATTLE_STYLE.get_color("metal_panel"), BATTLE_STYLE.get_color("border"), 2, 6))
+	_character_panel.add_theme_stylebox_override("panel", BATTLE_STYLE.make_inset_panel(BATTLE_STYLE.get_color("selection_panel"), BATTLE_STYLE.get_color("border"), 2, 6))
 	if _notice_panel != null and is_instance_valid(_notice_panel):
-		_notice_panel.add_theme_stylebox_override("panel", BATTLE_STYLE.make_inset_panel(BattleUIStyle.get_color("selection_panel"), BattleUIStyle.get_color("accent"), 2, 6))
-		_notice_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
+		_notice_panel.add_theme_stylebox_override("panel", BATTLE_STYLE.make_inset_panel(BATTLE_STYLE.get_color("selection_panel"), BATTLE_STYLE.get_color("accent"), 2, 6))
+		_notice_label.add_theme_color_override("font_color", BATTLE_STYLE.get_color("text_primary"))
 	_refresh_hover_text_styles()
-	_character_title_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
-	_character_close_button.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
-	_character_close_button.add_theme_color_override("font_hover_color", BattleUIStyle.get_color("button_hover_font"))
-	_character_close_button.add_theme_stylebox_override("normal", BATTLE_STYLE.make_button(BattleUIStyle.get_color("metal_panel"), BattleUIStyle.get_color("border"), 1, 4))
-	_character_close_button.add_theme_stylebox_override("hover", BATTLE_STYLE.make_button(BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), 1, 4))
-	_character_close_button.add_theme_stylebox_override("pressed", BATTLE_STYLE.make_button(BattleUIStyle.get_color("action_button").darkened(0.12), BattleUIStyle.get_color("accent"), 1, 4))
+	_character_title_label.add_theme_color_override("font_color", BATTLE_STYLE.get_color("text_primary"))
+	_character_close_button.add_theme_color_override("font_color", BATTLE_STYLE.get_color("text_primary"))
+	_character_close_button.add_theme_color_override("font_hover_color", BATTLE_STYLE.get_color("button_hover_font"))
+	_character_close_button.add_theme_stylebox_override("normal", BATTLE_STYLE.make_button(BATTLE_STYLE.get_color("metal_panel"), BATTLE_STYLE.get_color("border"), 1, 4))
+	_character_close_button.add_theme_stylebox_override("hover", BATTLE_STYLE.make_button(BATTLE_STYLE.get_color("action_button"), BATTLE_STYLE.get_color("accent"), 1, 4))
+	_character_close_button.add_theme_stylebox_override("pressed", BATTLE_STYLE.make_button(BATTLE_STYLE.get_color("action_button").darkened(0.12), BATTLE_STYLE.get_color("accent"), 1, 4))
 	_apply_scroll_bar_style(_character_skill_scroll.get_v_scroll_bar())
 	_apply_character_skill_right_margin()
 	if _character_card_view != null and is_instance_valid(_character_card_view):
@@ -926,12 +926,12 @@ func _refresh_hover_text_styles() -> void:
 	if _hover_title_label == null:
 		return
 	# 当前标题颜色；武将名使用与右键技能名一致的强调色，其他信息标题保持主文字色。
-	var title_color: Color = BattleUIStyle.get_color("text_guide") if bool(_hover_information.get("title_emphasis", false)) else BattleUIStyle.get_color("text_primary")
+	var title_color: Color = BATTLE_STYLE.get_color("text_guide") if bool(_hover_information.get("title_emphasis", false)) else BATTLE_STYLE.get_color("text_primary")
 	_hover_title_label.add_theme_color_override("font_color", title_color)
-	_hover_subtitle_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_muted"))
+	_hover_subtitle_label.add_theme_color_override("font_color", BATTLE_STYLE.get_color("text_muted"))
 	_hover_description_label.refresh_ui_style()
 	for skill_name_label: Label in _hover_skill_name_labels:
-		skill_name_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_guide"))
+		skill_name_label.add_theme_color_override("font_color", BATTLE_STYLE.get_color("text_guide"))
 	for skill_description_label: SkillDescriptionView in _hover_skill_description_labels:
 		skill_description_label.refresh_ui_style()
 
@@ -976,7 +976,7 @@ func _render_character_skills() -> void:
 		var empty_label: Label = Label.new()
 		empty_label.text = "该武将没有可显示的技能。"
 		empty_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		empty_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_muted"))
+		empty_label.add_theme_color_override("font_color", BATTLE_STYLE.get_color("text_muted"))
 		_character_skill_list.add_child(empty_label)
 		_append_character_opportunity_section()
 		_append_character_skill_bottom_spacer()
@@ -1005,7 +1005,7 @@ func _render_character_skills() -> void:
 		var skill_name_label: Label = Label.new()
 		skill_name_label.text = skill_information_title
 		skill_name_label.add_theme_font_size_override("font_size", 17)
-		skill_name_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_guide"))
+		skill_name_label.add_theme_color_override("font_color", BATTLE_STYLE.get_color("text_guide"))
 		skill_entry.add_child(skill_name_label)
 		# 技能描述行；长文本允许自然换行，滚动框负责查看超出面板高度的全部内容。
 		var skill_description_label: SkillDescriptionView = SkillDescriptionView.new()
@@ -1035,7 +1035,7 @@ func _append_character_opportunity_section() -> void:
 	var section_title: Label = Label.new()
 	section_title.text = "机缘"
 	section_title.add_theme_font_size_override("font_size", 18)
-	section_title.add_theme_color_override("font_color", BattleUIStyle.get_color("text_guide"))
+	section_title.add_theme_color_override("font_color", BATTLE_STYLE.get_color("text_guide"))
 	section_title.set_meta("information_box_opportunity_title", true)
 	_character_skill_list.add_child(section_title)
 	# 已获得机缘ID历史；数组按实际获得顺序保存且允许重复，详情不自行去重或改写卡面正文。
@@ -1045,7 +1045,7 @@ func _append_character_opportunity_section() -> void:
 		var empty_opportunity_label: Label = Label.new()
 		empty_opportunity_label.text = "尚未获得机缘。"
 		empty_opportunity_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		empty_opportunity_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_muted"))
+		empty_opportunity_label.add_theme_color_override("font_color", BATTLE_STYLE.get_color("text_muted"))
 		empty_opportunity_label.set_meta("information_box_opportunity_empty", true)
 		_character_skill_list.add_child(empty_opportunity_label)
 		return
@@ -1065,14 +1065,14 @@ func _append_character_opportunity_section() -> void:
 		var opportunity_name_label: Label = Label.new()
 		opportunity_name_label.text = "【%s机缘】" % quality_name
 		opportunity_name_label.add_theme_font_size_override("font_size", 16)
-		opportunity_name_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_guide"))
+		opportunity_name_label.add_theme_color_override("font_color", BATTLE_STYLE.get_color("text_guide"))
 		opportunity_entry.add_child(opportunity_name_label)
 		# 机缘规则正文；技能牌、数值牌与目标牌都显示原始完整描述。
 		var opportunity_description_label: Label = Label.new()
 		opportunity_description_label.text = str(opportunity_definition.get("description", "机缘元数据尚未登记。"))
 		opportunity_description_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		opportunity_description_label.add_theme_font_size_override("font_size", 14)
-		opportunity_description_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+		opportunity_description_label.add_theme_color_override("font_color", BATTLE_STYLE.get_color("text_secondary"))
 		opportunity_entry.add_child(opportunity_description_label)
 		_character_opportunity_entry_count += 1
 
@@ -1115,7 +1115,7 @@ func _refresh_skill_entry_styles() -> void:
 			var skill_name_label: Label = entry_node.get_child(0) as Label
 			# 当前技能说明标签；条目创建顺序保证索引1始终为说明。
 			var skill_description_label: SkillDescriptionView = entry_node.get_child(1) as SkillDescriptionView
-			skill_name_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_guide"))
+			skill_name_label.add_theme_color_override("font_color", BATTLE_STYLE.get_color("text_guide"))
 			if skill_description_label != null:
 				skill_description_label.refresh_ui_style()
 		elif entry_node is HSeparator and entry_node.has_meta("information_box_skill_separator"):
@@ -1124,14 +1124,14 @@ func _refresh_skill_entry_styles() -> void:
 			# 机缘历史条目；索引0为品质标题，索引1为需求钦定规则正文。
 			var opportunity_name_label: Label = entry_node.get_child(0) as Label
 			var opportunity_description_label: Label = entry_node.get_child(1) as Label
-			opportunity_name_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_guide"))
-			opportunity_description_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+			opportunity_name_label.add_theme_color_override("font_color", BATTLE_STYLE.get_color("text_guide"))
+			opportunity_description_label.add_theme_color_override("font_color", BATTLE_STYLE.get_color("text_secondary"))
 		elif entry_node is HSeparator and entry_node.has_meta("information_box_opportunity_separator"):
 			_apply_skill_separator_style(entry_node as HSeparator)
 		elif entry_node is Label and entry_node.has_meta("information_box_opportunity_title"):
-			(entry_node as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_guide"))
+			(entry_node as Label).add_theme_color_override("font_color", BATTLE_STYLE.get_color("text_guide"))
 		elif entry_node is Label:
-			(entry_node as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_muted"))
+			(entry_node as Label).add_theme_color_override("font_color", BATTLE_STYLE.get_color("text_muted"))
 
 
 ## 依据左侧牌面和右侧技能内容收紧武将详情高度；短内容不再保留固定440像素空白，长内容仍被440像素最大高度和滚动框限制。
@@ -1222,7 +1222,7 @@ func _apply_skill_separator_style(separator: HSeparator) -> void:
 		return
 	# 当前主题横线样式；1像素线条保持清晰，同时不抢夺技能名称的强调层级。
 	var separator_style: StyleBoxLine = StyleBoxLine.new()
-	separator_style.color = BattleUIStyle.get_color("border")
+	separator_style.color = BATTLE_STYLE.get_color("border")
 	separator_style.thickness = 1
 	separator_style.vertical = false
 	separator.add_theme_stylebox_override("separator", separator_style)
@@ -1233,10 +1233,10 @@ func _apply_scroll_bar_style(scroll_bar: VScrollBar) -> void:
 	if scroll_bar == null:
 		return
 	scroll_bar.custom_minimum_size.x = 12.0
-	scroll_bar.add_theme_stylebox_override("scroll", BATTLE_STYLE.make_panel(BattleUIStyle.get_color("metal_panel"), BattleUIStyle.get_color("border"), 1, 4))
-	scroll_bar.add_theme_stylebox_override("grabber", BATTLE_STYLE.make_panel(BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), 1, 4))
-	scroll_bar.add_theme_stylebox_override("grabber_highlight", BATTLE_STYLE.make_panel(BattleUIStyle.get_color("action_button").lightened(0.10), BattleUIStyle.get_color("accent").lightened(0.08), 1, 4))
-	scroll_bar.add_theme_stylebox_override("grabber_pressed", BATTLE_STYLE.make_panel(BattleUIStyle.get_color("action_button").darkened(0.10), BattleUIStyle.get_color("accent"), 1, 4))
+	scroll_bar.add_theme_stylebox_override("scroll", BATTLE_STYLE.make_panel(BATTLE_STYLE.get_color("metal_panel"), BATTLE_STYLE.get_color("border"), 1, 4))
+	scroll_bar.add_theme_stylebox_override("grabber", BATTLE_STYLE.make_panel(BATTLE_STYLE.get_color("action_button"), BATTLE_STYLE.get_color("accent"), 1, 4))
+	scroll_bar.add_theme_stylebox_override("grabber_highlight", BATTLE_STYLE.make_panel(BATTLE_STYLE.get_color("action_button").lightened(0.10), BATTLE_STYLE.get_color("accent").lightened(0.08), 1, 4))
+	scroll_bar.add_theme_stylebox_override("grabber_pressed", BATTLE_STYLE.make_panel(BATTLE_STYLE.get_color("action_button").darkened(0.10), BATTLE_STYLE.get_color("accent"), 1, 4))
 
 
 ## 点击武将详情遮罩空白区域时关闭详情；面板自身位于更高层级并会截断内部输入。

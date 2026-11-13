@@ -1,5 +1,8 @@
 extends Node
 
+## 战斗与局外样式独立验证；不再假设两个场景使用相同表面及文字色。
+const BATTLE_STYLE: Script = preload("res://scripts/ui/battle_surface_style.gd")
+
 ## 局内界面布局与鼠标命中回归测试。测试使用正式主场景，验证边缘按钮和底部区域在默认窗口内完整可见。
 
 ## 主场景完成主菜单和动态节点构建前等待的帧数；默认6帧覆盖控件初始化、主题刷新与容器排序。
@@ -116,7 +119,7 @@ func _run() -> void:
 	var round_info_row: HBoxContainer = conquest_level_label.get_parent() as HBoxContainer
 	# 顶栏共享标签样式；直接验证最终绘制资源的字体、字号和当前主题色，避免两个标签同时回退到错误默认值仍通过测试。
 	var top_info_label_settings: LabelSettings = round_label.label_settings
-	if round_label.text != "第3轮" or not conquest_level_label.visible or conquest_level_label.text != "第7关" or round_info_row == null or round_label.get_parent() != round_info_row or conquest_level_label.get_index() >= round_label.get_index() or top_info_label_settings == null or conquest_level_label.label_settings != top_info_label_settings or top_info_label_settings.font != ThemeDB.fallback_font or top_info_label_settings.font_size != 16 or draw_pile_label.get_theme_font("font") != ThemeDB.fallback_font or match_duration_label.get_theme_font("font") != ThemeDB.fallback_font or draw_pile_label.get_theme_font_size("font_size") != 16 or match_duration_label.get_theme_font_size("font_size") != 16 or not top_info_label_settings.font_color.is_equal_approx(BattleUIStyle.get_color("text_secondary")) or not top_info_label_settings.font_color.is_equal_approx(draw_pile_label.get_theme_color("font_color")) or not top_info_label_settings.font_color.is_equal_approx(match_duration_label.get_theme_color("font_color")):
+	if round_label.text != "第3轮" or not conquest_level_label.visible or conquest_level_label.text != "第7关" or round_info_row == null or round_label.get_parent() != round_info_row or conquest_level_label.get_index() >= round_label.get_index() or top_info_label_settings == null or conquest_level_label.label_settings != top_info_label_settings or top_info_label_settings.font != ThemeDB.fallback_font or top_info_label_settings.font_size != 16 or draw_pile_label.get_theme_font("font") != ThemeDB.fallback_font or match_duration_label.get_theme_font("font") != ThemeDB.fallback_font or draw_pile_label.get_theme_font_size("font_size") != 16 or match_duration_label.get_theme_font_size("font_size") != 16 or not top_info_label_settings.font_color.is_equal_approx(BattleUIStyle.get_color("battle_table_text", BattleUIStyle.get_color("text_secondary"))) or not top_info_label_settings.font_color.is_equal_approx(draw_pile_label.get_theme_color("font_color")) or not top_info_label_settings.font_color.is_equal_approx(match_duration_label.get_theme_color("font_color")):
 		_fail("conquest_top_info:%s/%s/%s" % [round_label.text, conquest_level_label.text, str(conquest_level_label.visible)])
 		return
 	# 后续布局断言继续使用身份局快照，避免模式专属菜单与资料逻辑影响既有十人桌测试。
@@ -203,7 +206,7 @@ func _run() -> void:
 	var card_name_popup_hover_style: StyleBoxFlat = card_name_option.get_popup().get_theme_stylebox("hover") as StyleBoxFlat
 	# UI风格弹出列表悬停样式；切换主题后由同一入口即时重绘。
 	var ui_style_popup_hover_style: StyleBoxFlat = ui_style_option.get_popup().get_theme_stylebox("hover") as StyleBoxFlat
-	if card_name_hover_style == null or ui_style_hover_style == null or card_name_popup_hover_style == null or ui_style_popup_hover_style == null or not card_name_hover_style.bg_color.is_equal_approx(BattleUIStyle.get_color("action_button")) or not ui_style_hover_style.border_color.is_equal_approx(Color(BattleUIStyle.get_color("accent"), 0.48)) or not card_name_popup_hover_style.bg_color.is_equal_approx(BattleUIStyle.get_color("action_button")) or not ui_style_popup_hover_style.border_color.is_equal_approx(Color(BattleUIStyle.get_color("accent"), 0.48)):
+	if card_name_hover_style == null or ui_style_hover_style == null or card_name_popup_hover_style == null or ui_style_popup_hover_style == null or not card_name_hover_style.bg_color.is_equal_approx(BATTLE_STYLE.get_color("action_button")) or not ui_style_hover_style.border_color.is_equal_approx(Color(BattleUIStyle.get_color("accent"), 0.48)) or not card_name_popup_hover_style.bg_color.is_equal_approx(BATTLE_STYLE.get_color("action_button")) or not ui_style_popup_hover_style.border_color.is_equal_approx(Color(BattleUIStyle.get_color("accent"), 0.48)):
 		_fail("match_menu_option_hover_style")
 		return
 	# 切换主题前的固定局内文案；高级黑金只允许替换视觉，不得改写菜单、牌桌信息或操作按钮文本。
@@ -657,7 +660,7 @@ func _run() -> void:
 	var hovered_character_title_label: Label = information_box.get("_hover_title_label") as Label
 	# 武将悬停结构化技能名标签；测试武将只有一个技能，应只创建一个金色技能名标签。
 	var hovered_character_skill_name_labels: Array = information_box.get("_hover_skill_name_labels") as Array
-	if hovered_character_title_label == null or hovered_character_title_label.get_theme_color("font_color") != BattleUIStyle.get_color("text_guide") or hovered_character_skill_name_labels.size() != 1 or (hovered_character_skill_name_labels[0] as Label).get_theme_color("font_color") != BattleUIStyle.get_color("text_guide"):
+	if hovered_character_title_label == null or hovered_character_title_label.get_theme_color("font_color") != BATTLE_STYLE.get_color("text_guide") or hovered_character_skill_name_labels.size() != 1 or (hovered_character_skill_name_labels[0] as Label).get_theme_color("font_color") != BATTLE_STYLE.get_color("text_guide"):
 		_fail("player_hover_accent_colors:%s/%s" % [hovered_character_title_label.get_theme_color("font_color") if hovered_character_title_label != null else Color.TRANSPARENT, (hovered_character_skill_name_labels[0] as Label).get_theme_color("font_color") if hovered_character_skill_name_labels.size() == 1 else Color.TRANSPARENT])
 		return
 	# 重复刷新前的稳定信息框尺寸；姬子等回合内高频广播角色必须保持同一自动换行布局。

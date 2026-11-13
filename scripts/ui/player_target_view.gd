@@ -807,7 +807,10 @@ func _refresh_visual_state() -> void:
 		player_style.shadow_size = 4
 		player_style.shadow_offset = Vector2.ZERO
 	_card_body.add_theme_stylebox_override("panel", player_style)
-	_card_finish.configure(card_size, Rect2(_artwork_rect.position, _artwork_rect.size), border_color, background_color, BattleUIStyle.on_dark(), _artwork_rect.visible)
+	_artwork_placeholder.add_theme_color_override("font_color", BattleUIStyle.readable_ink(background_color))
+	# 原画局部调色不会改变根节点的离场/非法目标透明度，也不会压暗身份与体力；换主题时显式复位。
+	_artwork_rect.self_modulate = BattleUIStyle.get_color("player_artwork_tint", Color.WHITE)
+	_card_finish.configure(card_size, Rect2(_artwork_rect.position, _artwork_rect.size), border_color, background_color, BattleUIStyle.on_dark(), _artwork_rect.visible, float(UIStyleRegistry.get_value(BattleUIStyle.get_active_style_id(), "player_artwork_edge_shade", 0.0)))
 	_refresh_card_back_style()
 	_refresh_card_back_overlay()
 	# 快照存活状态；不能用输入权限替代，离场角色仍存活但应保持透明武将牌而非显示阵亡文字。
@@ -1204,7 +1207,7 @@ func _refresh_decade_overlay(character_definition: Dictionary = {}) -> void:
 	CARD_STYLE.refine(name_banner_style, &"name")
 	_character_name_label.add_theme_stylebox_override("normal", name_banner_style)
 	# 身份徽记背景色；从活动主题面板色取得后强制完全不透明，旧场景中的半透明资源不能覆盖运行时规范。
-	var identity_badge_background: Color = BattleUIStyle.get_color("panel")
+	var identity_badge_background: Color = BattleUIStyle.get_color("player_identity_background", BattleUIStyle.get_color("panel"))
 	identity_badge_background.a = 1.0
 	# 身份徽记边框色；与活动主题边框保持一致并强制Alpha为1，确保所有身份始终清晰可读。
 	var identity_badge_border: Color = BattleUIStyle.get_color("border")
@@ -1443,7 +1446,7 @@ func _refresh_identity_badge() -> void:
 	# 本地标注使用浅青色与真实金色身份区分，避免玩家把推测误认为公开信息。
 	# 当前设计改用固定身份语义色统一公开、手动与自动标记，未知状态仍使用次级文字色。
 	# 当前身份字体色；公开身份、手动标记与自动标记使用同一阵营语义色，未知状态使用次级文字色。
-	var identity_color: Color = BattleUIStyle.get_color("identity_%s" % displayed_identity, BattleUIStyle.get_color("text_secondary")) if not displayed_identity.is_empty() else BattleUIStyle.get_color("text_secondary")
+	var identity_color: Color = BattleUIStyle.get_color("identity_%s" % displayed_identity, BattleUIStyle.get_color("player_identity_unknown", BattleUIStyle.get_color("text_secondary"))) if not displayed_identity.is_empty() else BattleUIStyle.get_color("player_identity_unknown", BattleUIStyle.get_color("text_secondary"))
 	_identity_badge_label.add_theme_color_override("font_color", identity_color)
 
 

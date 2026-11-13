@@ -299,14 +299,14 @@ func refresh_ui_style() -> void:
 	if not is_node_ready():
 		return
 	if _shade != null:
-		_shade.color = BattleUIStyle.get_color("shade")
+		_shade.color = BATTLE_STYLE.get_color("shade")
 	if _frame != null:
 		_frame.add_theme_stylebox_override("panel", BATTLE_STYLE.make_inset_panel())
 	if _scroll != null:
 		BattleUIStyle.apply_main_menu_scroll_bar_style(_scroll.get_v_scroll_bar())
 	# 标题与提示文字统一使用主题色；Label 必须显式覆盖 font_color，否则会回退场景默认白字。
 	for label: Label in _collect_theme_labels():
-		label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
+		label.add_theme_color_override("font_color", BATTLE_STYLE.get_color("text_primary"))
 	# 效果行按钮与滑条、输入框逐行重绘。
 	for row_variant: Variant in _effect_rows.values():
 		# 当前效果行的控件组；uses_amount 为 false 时后两项为 null。
@@ -559,7 +559,7 @@ func _make_label(text: String, node_name: String, minimum_width: float = 0.0) ->
 	label.text = text
 	if minimum_width > 0.0:
 		label.custom_minimum_size = Vector2(minimum_width, 0.0)
-	label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
+	label.add_theme_color_override("font_color", BATTLE_STYLE.get_color("text_primary"))
 	return label
 
 
@@ -837,11 +837,11 @@ func _find_nodes_by_prefix(root: Node, prefix: String) -> Array[Node]:
 ## 为第二层视图与关闭按钮上色；这些按钮在三个视图中分散存在，统一在此处理。
 func _apply_action_button_styles() -> void:
 	for node: Node in _find_nodes_by_prefix(self, "BackButton"):
-		BATTLE_STYLE.apply_interaction_button(node as Button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
+		BATTLE_STYLE.apply_interaction_button(node as Button, BATTLE_STYLE.get_color("panel"), BATTLE_STYLE.get_color("border"), false)
 	for node: Node in _find_nodes_by_prefix(self, "ConfirmButton"):
 		BATTLE_STYLE.apply_interaction_button(node as Button)
 	for node: Node in _find_nodes_by_prefix(self, "CloseButton"):
-		BATTLE_STYLE.apply_interaction_button(node as Button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
+		BATTLE_STYLE.apply_interaction_button(node as Button, BATTLE_STYLE.get_color("panel"), BATTLE_STYLE.get_color("border"), false)
 
 
 ## 为滑条应用主题轨道与已选区域；数值范围由效果声明决定，不在此修改。
@@ -849,11 +849,11 @@ func _apply_slider_style(slider: HSlider) -> void:
 	if slider == null:
 		return
 	# 未选择区域轨道；低对比度细边保证在两套深色主题下都清晰可见。
-	var track_style: StyleBoxFlat = _make_flat_inner_panel(BattleUIStyle.get_color("disabled_button"), BattleUIStyle.get_color("disabled_button_border"), 1, 4)
+	var track_style: StyleBoxFlat = _make_flat_inner_panel(BATTLE_STYLE.get_color("disabled_button"), BATTLE_STYLE.get_color("disabled_button_border"), 1, 4)
 	track_style.content_margin_top = 3.0
 	track_style.content_margin_bottom = 3.0
 	# 已选择区域轨道；主题强调色半透明填充表达当前数值，不引入固定配色。
-	var filled_style: StyleBoxFlat = _make_flat_inner_panel(Color(BattleUIStyle.get_color("accent"), 0.72), BattleUIStyle.get_color("accent"), 1, 4)
+	var filled_style: StyleBoxFlat = _make_flat_inner_panel(Color(BATTLE_STYLE.get_color("accent"), 0.72), BATTLE_STYLE.get_color("accent"), 1, 4)
 	filled_style.content_margin_top = 3.0
 	filled_style.content_margin_bottom = 3.0
 	slider.add_theme_stylebox_override("slider", track_style)
@@ -866,12 +866,12 @@ func _apply_line_edit_style(line_edit: LineEdit) -> void:
 	if line_edit == null:
 		return
 	line_edit.add_theme_font_override("font", ThemeDB.fallback_font)
-	line_edit.add_theme_stylebox_override("normal", BATTLE_STYLE.make_decade_button(BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false))
-	line_edit.add_theme_stylebox_override("focus", BATTLE_STYLE.make_decade_button(BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), true))
-	line_edit.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
-	line_edit.add_theme_color_override("font_placeholder_color", BattleUIStyle.get_color("text_muted"))
-	line_edit.add_theme_color_override("caret_color", BattleUIStyle.get_color("accent"))
-	line_edit.add_theme_color_override("selection_color", Color(BattleUIStyle.get_color("accent"), 0.42))
+	line_edit.add_theme_stylebox_override("normal", BATTLE_STYLE.make_decade_button(BATTLE_STYLE.get_color("panel"), BATTLE_STYLE.get_color("border"), false))
+	line_edit.add_theme_stylebox_override("focus", BATTLE_STYLE.make_decade_button(BATTLE_STYLE.get_color("action_button"), BATTLE_STYLE.get_color("accent"), true))
+	line_edit.add_theme_color_override("font_color", BATTLE_STYLE.get_color("text_primary"))
+	line_edit.add_theme_color_override("font_placeholder_color", BATTLE_STYLE.get_color("text_muted"))
+	line_edit.add_theme_color_override("caret_color", BATTLE_STYLE.get_color("accent"))
+	line_edit.add_theme_color_override("selection_color", Color(BATTLE_STYLE.get_color("accent"), 0.42))
 
 
 ## 创建没有重复阴影的内层面板；滑条轨道复用统一面板工厂后移除阴影。
@@ -888,17 +888,17 @@ func _apply_tab_bar_style(tab_bar: TabBar) -> void:
 	if tab_bar == null:
 		return
 	# 未选中标签；与第二层视图其它控件保持同一底色与细描边。
-	tab_bar.add_theme_stylebox_override("tab_unselected", _make_flat_inner_panel(BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), 1, 5))
+	tab_bar.add_theme_stylebox_override("tab_unselected", _make_flat_inner_panel(BATTLE_STYLE.get_color("panel"), BATTLE_STYLE.get_color("border"), 1, 5))
 	# 选中标签；强调色描边表达当前筛选类别，填充沿用操作按钮色以区别于未选中项。
-	tab_bar.add_theme_stylebox_override("tab_selected", _make_flat_inner_panel(BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), 2, 5))
+	tab_bar.add_theme_stylebox_override("tab_selected", _make_flat_inner_panel(BATTLE_STYLE.get_color("action_button"), BATTLE_STYLE.get_color("accent"), 2, 5))
 	# 悬停标签；只把描边换成强调色，避免引入第三套配色。
-	tab_bar.add_theme_stylebox_override("tab_hovered", _make_flat_inner_panel(BattleUIStyle.get_color("action_button"), BattleUIStyle.get_color("accent"), 1, 5))
+	tab_bar.add_theme_stylebox_override("tab_hovered", _make_flat_inner_panel(BATTLE_STYLE.get_color("action_button"), BATTLE_STYLE.get_color("accent"), 1, 5))
 	# 焦点样式置空：标签页由鼠标与左右方向键操作，额外的焦点框会与选中态描边重叠。
 	tab_bar.add_theme_stylebox_override("tab_focus", StyleBoxEmpty.new())
 	tab_bar.add_theme_font_override("font", ThemeDB.fallback_font)
-	tab_bar.add_theme_color_override("font_selected_color", BattleUIStyle.get_color("text_primary"))
-	tab_bar.add_theme_color_override("font_unselected_color", BattleUIStyle.get_color("text_muted"))
-	tab_bar.add_theme_color_override("font_hovered_color", BattleUIStyle.get_color("text_primary"))
+	tab_bar.add_theme_color_override("font_selected_color", BATTLE_STYLE.get_color("text_primary"))
+	tab_bar.add_theme_color_override("font_unselected_color", BATTLE_STYLE.get_color("text_muted"))
+	tab_bar.add_theme_color_override("font_hovered_color", BATTLE_STYLE.get_color("text_primary"))
 
 
 ## 处理 Esc 与安卓返回；第二层视图优先返回上一层，主视图才请求关闭窗口。

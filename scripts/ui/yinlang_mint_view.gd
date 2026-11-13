@@ -153,23 +153,23 @@ func configure(context: Dictionary) -> void:
 func refresh_ui_style() -> void:
 	# 候选按钮的统一底色与描边；选中态在下方单独覆盖，因此这里只处理未选中时的常规外观。
 	for button: Button in _suit_buttons + _rank_buttons + _card_buttons:
-		BATTLE_STYLE.apply_interaction_button(button, BattleUIStyle.get_color("tech_panel"), BattleUIStyle.get_color("tech_border"), false)
+		BATTLE_STYLE.apply_interaction_button(button, BATTLE_STYLE.get_color("tech_panel"), BATTLE_STYLE.get_color("tech_border"), false)
 	# 选中态样式；亮青描边 + 网格底，让「已选中的那一个」在一排按钮里一眼可辨。
-	var selected_style: StyleBoxFlat = BATTLE_STYLE.make_panel(BattleUIStyle.get_color("tech_grid"), BattleUIStyle.get_color("tech_accent"), 2, 6)
+	var selected_style: StyleBoxFlat = BATTLE_STYLE.make_panel(BATTLE_STYLE.get_color("tech_grid"), BATTLE_STYLE.get_color("tech_accent"), 2, 6)
 	for button: Button in _suit_buttons + _rank_buttons + _card_buttons:
 		button.add_theme_stylebox_override("pressed", selected_style)
-		button.add_theme_color_override("font_pressed_color", BattleUIStyle.get_color("tech_accent"))
+		button.add_theme_color_override("font_pressed_color", BATTLE_STYLE.get_color("tech_accent"))
 	# 可复制牌区域背景；与候选按钮的底色一致，形成一块「牌名池」面板。
-	_card_scroll.add_theme_stylebox_override("panel", BATTLE_STYLE.make_panel(BattleUIStyle.get_color("tech_panel"), BattleUIStyle.get_color("tech_border"), 1, 6))
+	_card_scroll.add_theme_stylebox_override("panel", BATTLE_STYLE.make_panel(BATTLE_STYLE.get_color("tech_panel"), BATTLE_STYLE.get_color("tech_border"), 1, 6))
 	# 输入框样式；深蓝底与蓝青描边，聚焦时描边换成强调色。
-	_name_edit.add_theme_stylebox_override("normal", BATTLE_STYLE.make_panel(BattleUIStyle.get_color("tech_panel"), BattleUIStyle.get_color("tech_border"), 1, 4))
-	_name_edit.add_theme_stylebox_override("focus", BATTLE_STYLE.make_panel(BattleUIStyle.get_color("tech_panel"), BattleUIStyle.get_color("tech_accent"), 2, 4))
-	_name_edit.add_theme_color_override("font_color", BattleUIStyle.get_color("tech_accent"))
-	_name_edit.add_theme_color_override("caret_color", BattleUIStyle.get_color("tech_accent"))
-	_name_edit.add_theme_color_override("font_placeholder_color", BattleUIStyle.get_color("text_muted"))
+	_name_edit.add_theme_stylebox_override("normal", BATTLE_STYLE.make_panel(BATTLE_STYLE.get_color("tech_panel"), BATTLE_STYLE.get_color("tech_border"), 1, 4))
+	_name_edit.add_theme_stylebox_override("focus", BATTLE_STYLE.make_panel(BATTLE_STYLE.get_color("tech_panel"), BATTLE_STYLE.get_color("tech_accent"), 2, 4))
+	_name_edit.add_theme_color_override("font_color", BATTLE_STYLE.get_color("tech_accent"))
+	_name_edit.add_theme_color_override("caret_color", BATTLE_STYLE.get_color("tech_accent"))
+	_name_edit.add_theme_color_override("font_placeholder_color", BATTLE_STYLE.get_color("text_muted"))
 	for button: Button in [_confirm_button, _cancel_button]:
-		BATTLE_STYLE.apply_interaction_button(button, BattleUIStyle.get_color("tech_panel"), BattleUIStyle.get_color("tech_border"), button == _confirm_button)
-	_confirm_button.add_theme_color_override("font_color", BattleUIStyle.get_color("tech_accent"))
+		BATTLE_STYLE.apply_interaction_button(button, BATTLE_STYLE.get_color("tech_panel"), BATTLE_STYLE.get_color("tech_border"), button == _confirm_button)
+	_confirm_button.add_theme_color_override("font_color", BATTLE_STYLE.get_color("tech_accent"))
 	_refresh_name_hint()
 
 
@@ -343,11 +343,11 @@ func _refresh_name_hint() -> void:
 	var rejection_reason: String = _name_rejection_reason()
 	if rejection_reason.is_empty():
 		_name_hint_label.text = "牌名可用。" if not _is_using_default_name() else "不输入牌名时使用默认牌名「%s」。" % DEFAULT_NAME_TEXT
-		_name_hint_label.add_theme_color_override("font_color", BattleUIStyle.get_color("tech_accent"))
+		_name_hint_label.add_theme_color_override("font_color", BATTLE_STYLE.get_color("tech_accent"))
 		return
 	# 空输入不再是错误状态：牌名有默认值，此时提示的是「默认牌名为什么不可用」，用危险色。
 	_name_hint_label.text = rejection_reason
-	_name_hint_label.add_theme_color_override("font_color", BattleUIStyle.get_color("danger"))
+	_name_hint_label.add_theme_color_override("font_color", BATTLE_STYLE.get_color("danger"))
 
 
 ## 判断当前是否处于「玩家没有输入、将使用默认牌名」的状态。

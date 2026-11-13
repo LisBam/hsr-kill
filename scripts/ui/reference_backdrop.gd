@@ -7,6 +7,12 @@ extends TextureRect
 const PAPER_ORBIT_RATIO: float = 0.48
 ## 纸面几何纹样分段数；默认12，取正整数，决定罗盘刻度密度，运行时无需修改。
 const PAPER_ORBIT_SEGMENTS: int = 12
+## 石墨桌面渐变的发光中心；默认位于画面中上部，仅影响视觉重心，运行时无需修改。
+const TABLE_LIGHT_CENTER: Vector2 = Vector2(0.5, 0.42)
+## 径向渐变最暗端的位置；默认右下角，覆盖整张桌面而不形成局部光斑。
+const TABLE_LIGHT_EXTENT: Vector2 = Vector2(1.0, 1.0)
+## 缓存的静态渐变纹理；只在主题变化时更新，不使用逐帧处理或业务随机数。
+var _table_gradient: GradientTexture2D = GradientTexture2D.new()
 
 ## 牌桌主体相对控件边缘的留白；默认18像素用于露出外层木质框，运行时无需动态修改。
 ## 活动主题可通过同名语义覆盖该几何值；崩铁风格使用34像素形成20像素中性深色外沿，暖木家园保持18像素。
@@ -108,6 +114,19 @@ func apply_ui_style(style_id: String) -> void:
 	outer_background_secondary_color = UIStyleRegistry.get_color(style_id, "outer_background_secondary", outer_background_color)
 	table_surface_color = UIStyleRegistry.get_color(style_id, "table_surface", table_surface_color)
 	table_inner_color = UIStyleRegistry.get_color(style_id, "table_inner", table_inner_color)
+	# 战斗专属语义缺失时回退到原主题；局外页面继续使用原有浅色纸面语义。
+	table_surface_color = UIStyleRegistry.get_color(style_id, "battle_table_surface", table_surface_color)
+	table_inner_color = UIStyleRegistry.get_color(style_id, "battle_table_inner", table_inner_color)
+	ornament_opacity = float(UIStyleRegistry.get_value(style_id, "battle_ornament_opacity", ornament_opacity))
+	# 径向色阶；中心到外缘逐渐压暗，保持中央出牌区域的可读性与留白。
+	var gradient: Gradient = Gradient.new()
+	gradient.colors = PackedColorArray([table_inner_color, table_surface_color])
+	_table_gradient.gradient = gradient
+	_table_gradient.fill = GradientTexture2D.FILL_RADIAL
+	_table_gradient.fill_from = TABLE_LIGHT_CENTER
+	_table_gradient.fill_to = TABLE_LIGHT_EXTENT
+	_table_gradient.width = 1024
+	_table_gradient.height = 512
 	wood_color = UIStyleRegistry.get_color(style_id, "rail", wood_color)
 	wood_highlight_color = UIStyleRegistry.get_color(style_id, "rail_highlight", wood_highlight_color)
 	gold_color = UIStyleRegistry.get_color(style_id, "ornament", gold_color)
@@ -247,8 +266,10 @@ func _make_rounded_box(background_color: Color, border_color: Color, border_widt
 
 
 ## 绘制纸金牌桌；环形纹样退到四角，桌面中央留给出牌、目标连线与结算提示。
+## 局内表面使用独立石墨语义与缓存径向渐变，局外纸面取值不参与本函数绘制。
 func _draw_paper_table(backdrop_size: Vector2) -> void:
 	# 客户区外框；深色边沿与首页保持一致，正文区使用完全不透明的浅色纸面。
+	# 当前局内实现以battle_table_surface替代旧浅色正文区，保留同一边框几何。
 	var paper_rect: Rect2 = Rect2(Vector2.ONE * table_inset, backdrop_size - Vector2.ONE * table_inset * 2.0)
 	# 纹样颜色；低透明度保证不会与目标提示争夺视觉注意力。
 	var line_color: Color = Color(gold_color, ornament_opacity)
@@ -256,6 +277,8 @@ func _draw_paper_table(backdrop_size: Vector2) -> void:
 	var radius: float = backdrop_size.y * PAPER_ORBIT_RATIO
 	draw_rect(Rect2(Vector2.ZERO, backdrop_size), outer_background_color)
 	draw_style_box(_make_rounded_box(table_surface_color, Color(gold_color, 0.35), 1, 18), paper_rect)
+	# 石墨内衬覆盖旧浅色纸面；向内留8像素，保证圆角外沿和细金边完整。
+	draw_texture_rect(_table_gradient, paper_rect.grow(-8.0), false)
 	for corner: Vector2 in [Vector2(paper_rect.position.x, paper_rect.end.y), Vector2(paper_rect.end.x, paper_rect.position.y)]:
 		draw_arc(corner, radius, 0.0, TAU, 128, line_color, 1.0, true)
 		draw_arc(corner, radius * 0.86, 0.0, TAU, 128, line_color, 1.0, true)

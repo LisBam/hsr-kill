@@ -1,6 +1,9 @@
 class_name ChatBubbleView
 extends Control
 
+## 战斗专用配色适配器；不修改主菜单共享主题，也不改变技能或聊天业务状态。
+const BATTLE_STYLE: Script = preload("res://scripts/ui/battle_surface_style.gd")
+
 ## 聊天气泡组件。发言者头顶显示其最新一条聊天正文，停留数秒后自动淡出隐藏。
 ## 组件只负责气泡外观、文本换行与淡出生命周期；发言者定位、坐标换算与按玩家复用由牌桌负责。
 ## 组件不读取快照、网络或规则状态，同一实例可被反复用于同一名玩家的多条消息。
@@ -89,13 +92,13 @@ func refresh_ui_style() -> void:
 	if _bubble_panel == null:
 		return
 	# 气泡专属面板样式；基于主题工厂生成后收紧内容边距，保持底色与描边随主题联动。
-	var bubble_style: StyleBoxFlat = BattleUIStyle.make_panel(BattleUIStyle.get_color("metal_panel"), BattleUIStyle.get_color("accent"), 1, 6)
+	var bubble_style: StyleBoxFlat = BattleUIStyle.make_panel(BATTLE_STYLE.get_color("metal_panel"), BATTLE_STYLE.get_color("accent"), 1, 6)
 	bubble_style.content_margin_left = horizontal_padding
 	bubble_style.content_margin_right = horizontal_padding
 	bubble_style.content_margin_top = vertical_padding
 	bubble_style.content_margin_bottom = vertical_padding
 	_bubble_panel.add_theme_stylebox_override("panel", bubble_style)
-	_message_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
+	_message_label.add_theme_color_override("font_color", BATTLE_STYLE.get_color("text_primary"))
 
 
 ## 按气泡换行上限预排版正文并返回最宽一行的像素宽度；与标签 AUTOWRAP_WORD_SMART 使用同一组断行标志，

@@ -1,5 +1,8 @@
 extends Node
 
+## 战斗专用配色适配器；不修改主菜单共享主题，也不改变技能或聊天业务状态。
+const BATTLE_STYLE: Script = preload("res://scripts/ui/battle_surface_style.gd")
+
 ## 表格行底纹。直接订阅宿主draw，不插入参与HBox布局的Control，数值列对齐与命中范围保持不变。
 
 ## 交错底纹序号；默认0，用父列表中的稳定行号决定背景强度，主题变化时可重绘。
@@ -20,8 +23,8 @@ func _ready() -> void:
 
 ## 从活动主题生成低对比交错条；不把胜负、座次等规则含义编码进配色。
 func refresh_style() -> void:
-	_style.bg_color = Color(BattleUIStyle.get_color("text_primary"), 0.055 if stripe_index % 2 == 0 else 0.018)
-	_style.border_color = Color(BattleUIStyle.get_color("border"), 0.12)
+	_style.bg_color = Color(BATTLE_STYLE.get_color("text_primary"), 0.055 if stripe_index % 2 == 0 else 0.018)
+	_style.border_color = Color(BATTLE_STYLE.get_color("border"), 0.12)
 	_style.border_width_bottom = 1
 	_style.set_corner_radius_all(4)
 	if is_instance_valid(_row):

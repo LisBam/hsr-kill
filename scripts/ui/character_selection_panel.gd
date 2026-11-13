@@ -301,36 +301,36 @@ func refresh_ui_style() -> void:
 	# 选将背景遮罩；保持阻断牌桌输入的行为，只更新主题透明色。
 	var selection_shade: ColorRect = get_node_or_null("SelectionShade") as ColorRect
 	if selection_shade != null:
-		selection_shade.color = BattleUIStyle.get_color("shade")
+		selection_shade.color = BATTLE_STYLE.get_color("shade")
 	# 选将主框；统一使用主题选择面板与边框语义。
 	var selection_frame: Panel = get_node_or_null("SelectionFrame") as Panel
 	if selection_frame != null:
-		selection_frame.add_theme_stylebox_override("panel", BATTLE_STYLE.make_inset_panel(BattleUIStyle.get_color("selection_panel"), BattleUIStyle.get_color("border"), 2, 6))
-	_title_label.add_theme_color_override("default_color", BattleUIStyle.get_color("text_primary"))
+		selection_frame.add_theme_stylebox_override("panel", BATTLE_STYLE.make_inset_panel(BATTLE_STYLE.get_color("selection_panel"), BATTLE_STYLE.get_color("border"), 2, 6))
+	_title_label.add_theme_color_override("default_color", BATTLE_STYLE.get_color("text_primary"))
 	_title_label.add_theme_font_size_override("normal_font_size", 24)
-	_status_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
-	_leader_character_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
-	_leader_divider.color = Color(BattleUIStyle.get_color("border"), 0.72)
+	_status_label.add_theme_color_override("font_color", BATTLE_STYLE.get_color("text_secondary"))
+	_leader_character_label.add_theme_color_override("font_color", BATTLE_STYLE.get_color("text_primary"))
+	_leader_divider.color = Color(BATTLE_STYLE.get_color("border"), 0.72)
 	BATTLE_STYLE.apply_interaction_button(_confirm_button)
-	BATTLE_STYLE.apply_interaction_button(_all_characters_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("accent"), _showing_all_characters)
-	_seat_selection_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
-	_identity_selection_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+	BATTLE_STYLE.apply_interaction_button(_all_characters_button, BATTLE_STYLE.get_color("panel"), BATTLE_STYLE.get_color("accent"), _showing_all_characters)
+	_seat_selection_label.add_theme_color_override("font_color", BATTLE_STYLE.get_color("text_secondary"))
+	_identity_selection_label.add_theme_color_override("font_color", BATTLE_STYLE.get_color("text_secondary"))
 	for seat_button_variant: Variant in _seat_button_views.values():
 		# 当前座次按钮；选中项使用强调边框，禁用项继续保留低对比度主题。
 		var seat_button: Button = seat_button_variant as Button
 		if seat_button != null:
-			_apply_assignment_button_style(seat_button, BattleUIStyle.get_color("accent"), int(seat_button.get_meta("seat_number", -1)) == _selected_seat_number)
+			_apply_assignment_button_style(seat_button, BATTLE_STYLE.get_color("accent"), int(seat_button.get_meta("seat_number", -1)) == _selected_seat_number)
 	for identity_variant: Variant in _identity_button_views.keys():
 		# 当前身份按钮；边框使用身份语义色，使选择结果与局内身份徽记一致。
 		var identity: String = str(identity_variant)
 		var identity_button: Button = _identity_button_views[identity] as Button
 		if identity_button != null:
-			_apply_assignment_button_style(identity_button, BattleUIStyle.get_color("identity_%s" % identity, BattleUIStyle.get_color("accent")), identity == _selected_identity)
+			_apply_assignment_button_style(identity_button, BATTLE_STYLE.get_color("identity_%s" % identity, BATTLE_STYLE.get_color("accent")), identity == _selected_identity)
 	for replacement_button_variant: Variant in _replacement_buttons.values():
 		# 当前换将按钮；主题切换只重绘颜色，不改变剩余张数、悬停显隐或候选内容。
 		var replacement_button: Button = replacement_button_variant as Button
 		if replacement_button != null:
-			BATTLE_STYLE.apply_interaction_button(replacement_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("accent"), true)
+			BATTLE_STYLE.apply_interaction_button(replacement_button, BATTLE_STYLE.get_color("panel"), BATTLE_STYLE.get_color("accent"), true)
 	if _leader_character_view != null and is_instance_valid(_leader_character_view):
 		_leader_character_view.refresh_ui_style()
 	for candidate_view_variant: Variant in _candidate_views.values():
@@ -506,7 +506,7 @@ func _set_identity_title(identity: String, seat_number: int, action_text: String
 	# 玩家可见座次文案；有效座次显示“N号位”，未知时显示“未知”避免标题缺段。
 	var seat_text: String = "%d号位" % seat_number if seat_number >= 1 else "未知"
 	# 当前身份语义色；身份片段着色，座次与动作文案使用默认主文字色。
-	_rendered_identity_color = BattleUIStyle.get_color("identity_%s" % identity, BattleUIStyle.get_color("text_secondary"))
+	_rendered_identity_color = BATTLE_STYLE.get_color("identity_%s" % identity, BATTLE_STYLE.get_color("text_secondary"))
 	_title_label.clear()
 	_title_label.push_paragraph(HORIZONTAL_ALIGNMENT_CENTER)
 	_title_label.append_text("你的身份为：")
@@ -639,7 +639,7 @@ func _render_candidates() -> void:
 			replacement_button.visible = false
 			replacement_button.z_index = 20
 			replacement_button.mouse_filter = Control.MOUSE_FILTER_STOP
-			BATTLE_STYLE.apply_interaction_button(replacement_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("accent"), true)
+			BATTLE_STYLE.apply_interaction_button(replacement_button, BATTLE_STYLE.get_color("panel"), BATTLE_STYLE.get_color("accent"), true)
 			replacement_button.pressed.connect(_request_candidate_replacement.bind(character_id))
 			replacement_button.mouse_entered.connect(_show_replacement_button.bind(character_id))
 			replacement_button.mouse_exited.connect(_queue_replacement_button_visibility_refresh.bind(character_id))
@@ -1309,18 +1309,18 @@ func _update_custom_button_states() -> void:
 		# 当前座次按钮；选中项使用强调状态。
 		var seat_number: int = int(seat_number_variant)
 		var seat_button: Button = _seat_button_views[seat_number] as Button
-		_apply_assignment_button_style(seat_button, BattleUIStyle.get_color("accent"), seat_number == _selected_seat_number)
+		_apply_assignment_button_style(seat_button, BATTLE_STYLE.get_color("accent"), seat_number == _selected_seat_number)
 	for identity_variant: Variant in _identity_button_views.keys():
 		# 当前身份按钮；使用对应身份语义色作为边框。
 		var identity: String = str(identity_variant)
 		var identity_button: Button = _identity_button_views[identity] as Button
-		_apply_assignment_button_style(identity_button, BattleUIStyle.get_color("identity_%s" % identity, BattleUIStyle.get_color("accent")), identity == _selected_identity)
+		_apply_assignment_button_style(identity_button, BATTLE_STYLE.get_color("identity_%s" % identity, BATTLE_STYLE.get_color("accent")), identity == _selected_identity)
 
 
 ## 为座次与身份按钮应用明确选中反馈；选中项同时改变背景、边框和字体色，未选项保持普通操作色。
 func _apply_assignment_button_style(button: Button, border_color: Color, selected: bool) -> void:
 	# 选中背景色；从主题操作底色向语义边框色混合，保持文字可读且在两套主题中都有明显变化。
-	var background_color: Color = BattleUIStyle.get_color("action_button").lerp(border_color, 0.34) if selected else BattleUIStyle.get_color("action_button")
+	var background_color: Color = BATTLE_STYLE.get_color("action_button").lerp(border_color, 0.34) if selected else BATTLE_STYLE.get_color("action_button")
 	BATTLE_STYLE.apply_interaction_button(button, background_color, border_color, selected)
 	if selected:
 		# 已选按钮的底色承载座次或身份语义；各态文字固定白色，悬停按下也不能回退到同色字体。
@@ -1331,7 +1331,7 @@ func _apply_assignment_button_style(button: Button, border_color: Color, selecte
 		button.add_theme_color_override("font_focus_color", SELECTED_ASSIGNMENT_FONT_COLOR)
 		button.add_theme_color_override("font_disabled_color", SELECTED_ASSIGNMENT_FONT_COLOR)
 	else:
-		button.add_theme_color_override("font_focus_color", BattleUIStyle.get_color("button_font"))
+		button.add_theme_color_override("font_focus_color", BATTLE_STYLE.get_color("button_font"))
 
 
 ## 清理动态座次与身份按钮；每次私有快照变化后按最新可用名额重建。

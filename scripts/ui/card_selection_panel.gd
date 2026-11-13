@@ -164,12 +164,12 @@ func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_shade = ColorRect.new()
 	_shade.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	_shade.color = BattleUIStyle.get_color("shade", shade_color)
+	_shade.color = BATTLE_STYLE.get_color("shade", shade_color)
 	_shade.mouse_filter = Control.MOUSE_FILTER_STOP
 	add_child(_shade)
 	_frame = PanelContainer.new()
 	_set_frame_size(Vector2(panel_max_width, panel_max_height))
-	_frame.add_theme_stylebox_override("panel", BATTLE_STYLE.make_inset_panel(BattleUIStyle.get_color("selection_panel"), BattleUIStyle.get_color("border"), 2, 6))
+	_frame.add_theme_stylebox_override("panel", BATTLE_STYLE.make_inset_panel(BATTLE_STYLE.get_color("selection_panel"), BATTLE_STYLE.get_color("border"), 2, 6))
 	add_child(_frame)
 	# 选择框主列；标题、提示、滚动分区和操作按钮从上到下排列。
 	var content: VBoxContainer = VBoxContainer.new()
@@ -177,14 +177,14 @@ func _ready() -> void:
 	_frame.add_child(content)
 	_title_label = Label.new()
 	_title_label.add_theme_font_size_override("font_size", 22)
-	_title_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
+	_title_label.add_theme_color_override("font_color", BATTLE_STYLE.get_color("text_primary"))
 	_title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	content.add_child(_title_label)
 	_prompt_label = RichTextLabel.new()
 	_prompt_label.bbcode_enabled = true
 	_prompt_label.scroll_active = false
 	_prompt_label.custom_minimum_size = Vector2(0.0, 24.0)
-	_prompt_label.add_theme_color_override("default_color", BattleUIStyle.get_color("text_secondary"))
+	_prompt_label.add_theme_color_override("default_color", BATTLE_STYLE.get_color("text_secondary"))
 	_prompt_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_prompt_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	content.add_child(_prompt_label)
@@ -213,7 +213,7 @@ func _ready() -> void:
 	_cancel_button = Button.new()
 	_cancel_button.text = "不选择"
 	_cancel_button.custom_minimum_size = Vector2(96.0, 40.0)
-	BATTLE_STYLE.apply_interaction_button(_cancel_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
+	BATTLE_STYLE.apply_interaction_button(_cancel_button, BATTLE_STYLE.get_color("panel"), BATTLE_STYLE.get_color("border"), false)
 	_cancel_button.pressed.connect(_on_cancel_pressed)
 	_action_row.add_child(_cancel_button)
 	visible = false
@@ -224,17 +224,17 @@ func _ready() -> void:
 func refresh_ui_style() -> void:
 	if not is_node_ready():
 		return
-	shade_color = BattleUIStyle.get_color("shade", shade_color)
-	taken_card_label_background_color = BattleUIStyle.get_color("taken_label_background", taken_card_label_background_color)
+	shade_color = BATTLE_STYLE.get_color("shade", shade_color)
+	taken_card_label_background_color = BATTLE_STYLE.get_color("taken_label_background", taken_card_label_background_color)
 	_shade.color = shade_color
-	_frame.add_theme_stylebox_override("panel", BATTLE_STYLE.make_inset_panel(BattleUIStyle.get_color("selection_panel"), BattleUIStyle.get_color("border"), 2, 6))
-	_title_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
-	_prompt_label.add_theme_color_override("default_color", BattleUIStyle.get_color("text_secondary"))
+	_frame.add_theme_stylebox_override("panel", BATTLE_STYLE.make_inset_panel(BATTLE_STYLE.get_color("selection_panel"), BATTLE_STYLE.get_color("border"), 2, 6))
+	_title_label.add_theme_color_override("font_color", BATTLE_STYLE.get_color("text_primary"))
+	_prompt_label.add_theme_color_override("default_color", BATTLE_STYLE.get_color("text_secondary"))
 	BATTLE_STYLE.apply_interaction_button(_confirm_button)
-	BATTLE_STYLE.apply_interaction_button(_cancel_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
+	BATTLE_STYLE.apply_interaction_button(_cancel_button, BATTLE_STYLE.get_color("panel"), BATTLE_STYLE.get_color("border"), false)
 	for section_label: Label in _section_labels:
 		if section_label != null and is_instance_valid(section_label):
-			section_label.add_theme_color_override("font_color", BattleUIStyle.get_color("selection_section"))
+			section_label.add_theme_color_override("font_color", BATTLE_STYLE.get_color("selection_section"))
 	for owner_label: Label in _owner_labels:
 		if owner_label != null and is_instance_valid(owner_label):
 			_apply_owner_label_style(owner_label)
@@ -599,7 +599,7 @@ func _create_arrangement_row(title: String, card_uids: Array[int]) -> HFlowConta
 	_zone_container.add_child(section)
 	var label: Label = Label.new()
 	label.text = title
-	label.add_theme_color_override("font_color", BattleUIStyle.get_color("selection_section"))
+	label.add_theme_color_override("font_color", BATTLE_STYLE.get_color("selection_section"))
 	label.add_theme_font_size_override("font_size", 16)
 	section.add_child(label)
 	_section_labels.append(label)
@@ -683,7 +683,7 @@ func _add_zone_row(zone: String, candidates: Array) -> void:
 	# 区域标题；使用规则区名称而不是技术字符串。
 	var zone_label: Label = Label.new()
 	zone_label.text = {"hand":"手牌区", "equipment":"装备区", "judgment":"判定区", "processing":"展示区", "discard_pile":"弃牌堆"}.get(zone, zone)
-	zone_label.add_theme_color_override("font_color", BattleUIStyle.get_color("selection_section"))
+	zone_label.add_theme_color_override("font_color", BATTLE_STYLE.get_color("selection_section"))
 	zone_label.add_theme_font_size_override("font_size", 16)
 	section.add_child(zone_label)
 	_section_labels.append(zone_label)
@@ -814,9 +814,9 @@ func _add_card_slot(card_row: Container, candidate: Dictionary, selectable: bool
 
 ## 为公共牌领取者标签应用当前主题；该入口只处理配色与边距，不读取领取者数据。
 func _apply_owner_label_style(owner_label: Label) -> void:
-	owner_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
+	owner_label.add_theme_color_override("font_color", BATTLE_STYLE.get_color("text_primary"))
 	# 标签背景样式；使用1像素主题强调描边把归属信息与牌面底部文字区分开。
-	var owner_style: StyleBoxFlat = BATTLE_STYLE.make_panel(taken_card_label_background_color, BattleUIStyle.get_color("accent"), 1, 3)
+	var owner_style: StyleBoxFlat = BATTLE_STYLE.make_panel(taken_card_label_background_color, BATTLE_STYLE.get_color("accent"), 1, 3)
 	owner_style.content_margin_left = 2.0
 	owner_style.content_margin_top = 0.0
 	owner_style.content_margin_right = 2.0

@@ -112,16 +112,16 @@ func configure(context: Dictionary) -> void:
 func refresh_ui_style() -> void:
 	# 候选按钮的统一底色与描边；选中态在下方单独覆盖，因此这里只处理未选中时的常规外观。
 	for button: Button in _timing_buttons + _effect_buttons:
-		BATTLE_STYLE.apply_interaction_button(button, BattleUIStyle.get_color("tech_panel"), BattleUIStyle.get_color("tech_border"), false)
+		BATTLE_STYLE.apply_interaction_button(button, BATTLE_STYLE.get_color("tech_panel"), BATTLE_STYLE.get_color("tech_border"), false)
 	# 选中态样式；亮青描边 + 网格底，让「已选中的那一个」在四个按钮里一眼可辨。
-	var selected_style: StyleBoxFlat = BATTLE_STYLE.make_panel(BattleUIStyle.get_color("tech_grid"), BattleUIStyle.get_color("tech_accent"), 2, 6)
+	var selected_style: StyleBoxFlat = BATTLE_STYLE.make_panel(BATTLE_STYLE.get_color("tech_grid"), BATTLE_STYLE.get_color("tech_accent"), 2, 6)
 	for button: Button in _timing_buttons + _effect_buttons:
 		button.add_theme_stylebox_override("pressed", selected_style)
-		button.add_theme_color_override("font_pressed_color", BattleUIStyle.get_color("tech_accent"))
-	_preview_label.add_theme_color_override("font_color", BattleUIStyle.get_color("tech_accent"))
+		button.add_theme_color_override("font_pressed_color", BATTLE_STYLE.get_color("tech_accent"))
+	_preview_label.add_theme_color_override("font_color", BATTLE_STYLE.get_color("tech_accent"))
 	for button: Button in [_confirm_button, _cancel_button]:
-		BATTLE_STYLE.apply_interaction_button(button, BattleUIStyle.get_color("tech_panel"), BattleUIStyle.get_color("tech_border"), button == _confirm_button)
-	_confirm_button.add_theme_color_override("font_color", BattleUIStyle.get_color("tech_accent"))
+		BATTLE_STYLE.apply_interaction_button(button, BATTLE_STYLE.get_color("tech_panel"), BATTLE_STYLE.get_color("tech_border"), button == _confirm_button)
+	_confirm_button.add_theme_color_override("font_color", BATTLE_STYLE.get_color("tech_accent"))
 
 
 ## 建立左右两栏；每栏由标题与纵向排列的候选按钮组成。

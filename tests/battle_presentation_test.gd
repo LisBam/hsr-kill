@@ -122,7 +122,17 @@ func _run() -> void:
 	character_selection.bind_snapshot({"phase":"leader_selecting", "can_select":true, "local_candidates":["gepard", "march_7th", "natasha", "dan_heng"], "local_identity":"leader", "local_seat_number":1})
 	character_selection.call("_select_candidate", "march_7th")
 	await _settle()
+	_check(UIStyleRegistry.get_color(BattleUIStyle.get_active_style_id(), "battle_selection_panel").get_luminance() < 0.3, "选将窗口仍使用亮白底")
 	await _capture("01a_character_selection")
+	character_selection.bind_snapshot({"phase":"others_selecting", "can_select":true, "local_candidates":["gepard", "march_7th", "natasha", "dan_heng", "xiluwa", "sangbo", "xing", "qiong"], "leader_character_id":"xiluwa", "local_identity":"rebel", "local_seat_number":2, "initial_identity":"rebel", "initial_seat_number":2, "allow_custom_assignment":true, "allow_all_characters":true, "player_count":8, "seat_options":[1,2,3,4,5,6,7,8], "identity_options":["leader","loyalist","rebel","renegade"]})
+	await _settle()
+	for button: Button in character_selection.find_children("*", "Button", true, false):
+		for state_name: String in ["normal", "hover", "pressed", "disabled"]:
+			# 读取真实按钮绘制状态；禁用态同样不得回退浅色共享材质。
+			var style: StyleBoxFlat = button.get_theme_stylebox(state_name) as StyleBoxFlat
+			if style != null and style.bg_color.a > 0.0:
+				_check(style.bg_color.get_luminance() < 0.8, "选将按钮仍有白底：%s/%s" % [button.name, state_name])
+	await _capture("01b_custom_character_selection")
 	character_selection.close()
 	# 取消、重选并拖动；选中位移不能与鼠标同时争抢原牌位置。
 	card.set_selected_state(false)
@@ -235,6 +245,11 @@ func _run() -> void:
 		GameSettings.set_ui_style(style_id)
 		await _settle()
 		_check((feedback.get("_accent") as Color).is_equal_approx(BattleUIStyle.get_color("accent")), "选中边光未跟随主题")
+		_check((main.get_node("ReferenceBackdrop") as ReferenceBackdrop).table_surface_color.is_equal_approx(BattleUIStyle.get_color("battle_table_surface", BattleUIStyle.get_color("table_surface"))), "牌桌未应用独立局内配色")
+		if style_id == UIStyleRegistry.STYLE_SPACE_MONO:
+			_check(BattleUIStyle.get_color("battle_table_inner").get_luminance() < 0.3, "局内桌面过亮")
+			_check(BattleUIStyle.get_color("table_surface").get_luminance() > 0.8, "战斗换肤影响了局外纸面")
+			_check((main.get_node("%CenterTurnLabel") as Label).get_theme_color("font_color").get_luminance() > 0.7, "深色信息栏文字不清晰")
 		await _capture("theme_" + style_id)
 	# 重演控制条只改变显示，不开启录制或网络。
 	main.call("_ensure_replay_playback_components")

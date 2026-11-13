@@ -55,16 +55,16 @@ func refresh_ui_style() -> void:
 	if not is_node_ready():
 		return
 	# 全屏遮罩颜色；统一读取主题 shade 语义，避免弹窗停留在固定暖木色。
-	_shade.color = BattleUIStyle.get_color("shade")
+	_shade.color = BATTLE_STYLE.get_color("shade")
 	# 弹窗主框样式；复用内嵌面板工厂，使所有主题共享尺寸与边距但使用各自材质色。
 	# 弹窗样式；暖黑底与金属边框延续武将牌和现有选择框视觉语言。
-	var frame_style: StyleBoxFlat = BATTLE_STYLE.make_inset_panel(BattleUIStyle.get_color("selection_panel"), BattleUIStyle.get_color("accent"), 3, 10)
+	var frame_style: StyleBoxFlat = BATTLE_STYLE.make_inset_panel(BATTLE_STYLE.get_color("selection_panel"), BATTLE_STYLE.get_color("accent"), 3, 10)
 	frame_style.shadow_color = Color(0.0, 0.0, 0.0, 0.18)
 	frame_style.shadow_size = 14
 	frame_style.shadow_offset = Vector2(0.0, 6.0)
 	_frame.add_theme_stylebox_override("panel", frame_style)
-	_status_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
-	($Frame/Margin/Content/TitleLabel as Label).add_theme_color_override("font_color", BattleUIStyle.get_color("text_guide"))
+	_status_label.add_theme_color_override("font_color", BATTLE_STYLE.get_color("text_primary"))
+	($Frame/Margin/Content/TitleLabel as Label).add_theme_color_override("font_color", BATTLE_STYLE.get_color("text_guide"))
 
 
 ## 根据观察者裁剪快照刷新弹窗；选择阶段显示本地候选，投票公开阶段显示全体票面，其他阶段立即关闭。

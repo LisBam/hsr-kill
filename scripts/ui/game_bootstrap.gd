@@ -7,11 +7,19 @@ extends Control
 @export_file("*.tscn") var main_scene_path: String = "res://scenes/main.tscn"
 
 ## 启动进度轨道色；固定纸面中性色，加载主题前即可使用，运行时无需修改。
-@export var progress_track_color: Color = Color("d4cfc5")
+## 默认深灰轨道避免启动时闪现浅色，颜色独立于资源加载进度。
+@export var progress_track_color: Color = Color("303840")
 ## 启动进度填充色；低饱和金色与首页一致，运行时无需修改。
 @export var progress_fill_color: Color = Color("b59a66")
 ## 进度条圆角半径；默认3逻辑像素，只影响绘制，运行时无需修改。
 @export_range(0, 12, 1) var progress_corner_radius: int = 3
+
+## 启动背景色；默认深石墨与首页同色系，不依赖主场景加载，运行时无需修改。
+@export var background_color: Color = Color("191e24")
+## 启动标题色；默认暖白保证深底对比度，运行时无需修改。
+@export var title_color: Color = Color("e3ddd1")
+## 启动状态色；默认柔和暖灰区分标题层级，运行时无需修改。
+@export var status_color: Color = Color("bbb7ae")
 
 ## 启动状态文字；加载失败时保留可读错误，避免无反馈黑屏。
 @onready var _status_label: Label = %BootStatus
@@ -22,6 +30,9 @@ extends Control
 
 ## 先留出首帧绘制机会，再提交后台场景请求；启动界面本身始终可响应系统窗口事件。
 func _ready() -> void:
+	($Background as ColorRect).color = background_color
+	($Center/Content/Title as Label).add_theme_color_override("font_color", title_color)
+	_status_label.add_theme_color_override("font_color", status_color)
 	# 启动入口使用轻量样式工厂；不加载牌桌、原画或规则资源。
 	var progress_track: StyleBoxFlat = StyleBoxFlat.new()
 	progress_track.bg_color = progress_track_color

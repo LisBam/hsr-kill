@@ -170,13 +170,13 @@ func clear_history() -> void:
 func refresh_ui_style() -> void:
 	if _frame == null:
 		return
-	_frame.add_theme_stylebox_override("panel", BATTLE_STYLE.make_panel(BattleUIStyle.get_color("metal_panel"), BattleUIStyle.get_color("border"), 2, 8))
-	_title_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
-	_history_view.add_theme_color_override("default_color", BattleUIStyle.get_color("text_secondary"))
-	BATTLE_STYLE.apply_interaction_button(_close_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
+	_frame.add_theme_stylebox_override("panel", BATTLE_STYLE.make_panel(BATTLE_STYLE.get_color("metal_panel"), BATTLE_STYLE.get_color("border"), 2, 8))
+	_title_label.add_theme_color_override("font_color", BATTLE_STYLE.get_color("text_primary"))
+	_history_view.add_theme_color_override("default_color", BATTLE_STYLE.get_color("text_secondary"))
+	BATTLE_STYLE.apply_interaction_button(_close_button, BATTLE_STYLE.get_color("panel"), BATTLE_STYLE.get_color("border"), false)
 	BATTLE_STYLE.apply_interaction_button(_send_button)
-	_input_field.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
-	_input_field.add_theme_color_override("caret_color", BattleUIStyle.get_color("accent"))
+	_input_field.add_theme_color_override("font_color", BATTLE_STYLE.get_color("text_primary"))
+	_input_field.add_theme_color_override("caret_color", BATTLE_STYLE.get_color("accent"))
 
 
 ## 把单条聊天条目格式化为纯文本行；固定“玩家名：消息”结构，与联机大厅聊天一致，不显示时间。

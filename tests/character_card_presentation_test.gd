@@ -72,11 +72,11 @@ func _run() -> void:
 		captions.append(caption)
 	for style_id: String in UIStyleRegistry.get_style_ids():
 		BattleUIStyle.set_active_style(style_id)
-		backdrop.color = BattleUIStyle.get_color("table_background", Color("20242c"))
+		backdrop.color = BattleUIStyle.get_color("battle_table_surface", BattleUIStyle.get_color("table_surface"))
 		title.text = "武将牌 · 材质与状态 / " + style_id
-		title.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
+		title.add_theme_color_override("font_color", BattleUIStyle.readable_ink(backdrop.color))
 		for caption: Label in captions:
-			caption.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
+			caption.add_theme_color_override("font_color", BattleUIStyle.readable_ink(backdrop.color))
 		for card: PlayerTargetView in _cards:
 			card.refresh_ui_style()
 			card.get_node("CardFinish").set_hovered(true)
@@ -91,6 +91,10 @@ func _run() -> void:
 			_check(card.get_node("CharacterCornerStack").get_index() > card.get_node("InputArea").get_index(), "corner action input order changed")
 			_check(not (card.get_node("SelectedTargetMarker") as Label).visible, "selection text reappeared")
 			_check(is_equal_approx((card.get_node("IdentityBadge") as Label).get_theme_stylebox("normal").bg_color.a, 1.0), "identity background is transparent")
+			_check((card.get_node("Artwork") as TextureRect).self_modulate.is_equal_approx(Color.WHITE), "artwork must preserve its original brightness")
+			_check(is_zero_approx(float(card.get_node("CardFinish").get("_edge_shade"))) and is_zero_approx(float(card.get_node("CardFinish").get("lower_shade_height"))), "artwork shading must remain disabled")
+			if index == 1:
+				_check((card.get_node("IdentityBadge") as Label).get_theme_color("font_color").is_equal_approx(BattleUIStyle.get_color("player_identity_unknown", BattleUIStyle.get_color("text_secondary"))), "unknown identity lost contrast")
 			# 相同快照刷新签名不得替换既有体力节点；装饰跟随原节点生命周期。
 			var first_pip_id: int = card.get_node("HealthFrame/HealthPips").get_child(0).get_instance_id()
 			card.set_target_state(card.is_legal_target, card.is_target_selected, card.is_target_selection_active)

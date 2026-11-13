@@ -32,6 +32,14 @@ func _run() -> void:
 	if not bootstrap.is_visible_in_tree() or not bootstrap.has_node("%BootStatus"):
 		_fail("首帧缺少可见启动反馈")
 		return
+	if (bootstrap.get_node("Background") as ColorRect).color.get_luminance() >= 0.3 or (bootstrap.get_node("%BootStatus") as Label).get_theme_color("font_color").get_luminance() < 0.6:
+		_fail("启动页深色背景或文字对比度不符合统一主题")
+		return
+	if DisplayServer.get_name() != "headless":
+		# 首屏仍停留在加载请求前的第二帧，直接保存已绘制画面，不延后正式加载流程。
+		await RenderingServer.frame_post_draw
+		DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path("res://.godot/dark_ui_review"))
+		get_viewport().get_texture().get_image().save_png("res://.godot/dark_ui_review/00_startup.png")
 	while get_tree().current_scene == bootstrap or get_tree().current_scene == null:
 		if Time.get_ticks_usec() - started > TIMEOUT_USEC:
 			_fail("正式首页加载超时")

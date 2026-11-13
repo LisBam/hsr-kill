@@ -161,12 +161,12 @@ func _unhandled_input(event: InputEvent) -> void:
 func refresh_ui_style() -> void:
 	if _control_bar == null:
 		return
-	_control_bar.add_theme_stylebox_override("panel", BATTLE_STYLE.make_panel(BattleUIStyle.get_color("metal_panel"), BattleUIStyle.get_color("accent"), 2, 8))
-	_drag_handle_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
-	_title_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
+	_control_bar.add_theme_stylebox_override("panel", BATTLE_STYLE.make_panel(BATTLE_STYLE.get_color("metal_panel"), BATTLE_STYLE.get_color("accent"), 2, 8))
+	_drag_handle_label.add_theme_color_override("font_color", BATTLE_STYLE.get_color("text_secondary"))
+	_title_label.add_theme_color_override("font_color", BATTLE_STYLE.get_color("text_primary"))
 	# OptionButton 继承 Button；复用交互按钮样式统一常态、悬停与按下外观。
-	BATTLE_STYLE.apply_interaction_button(_speed_option, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
-	BATTLE_STYLE.apply_interaction_button(_exit_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
+	BATTLE_STYLE.apply_interaction_button(_speed_option, BATTLE_STYLE.get_color("panel"), BATTLE_STYLE.get_color("border"), false)
+	BATTLE_STYLE.apply_interaction_button(_exit_button, BATTLE_STYLE.get_color("panel"), BATTLE_STYLE.get_color("border"), false)
 
 
 ## 速度选择回调；把选项元数据中的倍率转交牌桌，元数据缺失时回退原速。

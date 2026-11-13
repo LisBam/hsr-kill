@@ -10,7 +10,8 @@ extends Node2D
 ## 普通内框透明度；默认0.40形成细金属线，不替代合法或选中反馈，可运行时调整。
 @export_range(0.0, 1.0, 0.05) var rim_alpha: float = 0.40
 ## 插画底端压暗区域高度；默认28像素衬托底边信息，不遮住武将面部，可运行时调整。
-@export_range(0.0, 50.0, 1.0) var lower_shade_height: float = 28.0
+## 原画保真默认关闭底端蒙层；设置为0不改变任何原画像素，框线仍正常绘制。
+@export_range(0.0, 50.0, 1.0) var lower_shade_height: float = 0.0
 ## 渐层最大透明度；默认0.24只轻压插画底边，保持原图的主体亮度，可运行时调整。
 @export_range(0.0, 0.5, 0.01) var shade_alpha: float = 0.24
 ## 悬停金属线过渡时长；默认0.18秒，有限Tween完成后不再逐帧刷新，可运行时调整。
@@ -33,6 +34,10 @@ const LOWER_RAIL_HALF_WIDTH: float = 13.0
 const LOWER_RAIL_ALPHA: float = 0.60
 ## 渐层底色压暗比例；默认0.55用于生成透明的深色衬底。
 const SHADE_DARKENING: float = 0.55
+## 侧缘渐暗宽度相对原画短边的比例；默认0.16保留面部与服装中心细节。
+const EDGE_SHADE_RATIO: float = 0.16
+## 主题提供的边缘遮光强度；0关闭，最大0.6避免原画边缘过黑，仅饰面使用。
+var _edge_shade: float = 0.0
 ## 宿主牌面尺寸；由configure提供，默认零表示未完成初始化。
 var _card_size: Vector2 = Vector2.ZERO
 ## 插画实际局部矩形；只用于内部渐层裁界，不修改插画本身。
@@ -66,13 +71,14 @@ func _ready() -> void:
 
 
 ## 接收已经解析的表现数据；所有值均为副本，不保存宿主或业务对象引用。
-func configure(card_size: Vector2, artwork_bounds: Rect2, trim_color: Color, surface_color: Color, highlight_color: Color, has_artwork: bool) -> void:
+func configure(card_size: Vector2, artwork_bounds: Rect2, trim_color: Color, surface_color: Color, highlight_color: Color, has_artwork: bool, edge_shade: float = 0.0) -> void:
 	_card_size = card_size
 	_artwork_bounds = artwork_bounds
 	_trim_color = trim_color
 	_surface_color = surface_color
 	_highlight_color = highlight_color
 	_has_artwork = has_artwork
+	_edge_shade = clampf(edge_shade, 0.0, 0.6)
 	queue_redraw()
 
 
@@ -93,6 +99,8 @@ func set_hovered(hovered: bool) -> void:
 func _draw() -> void:
 	if _card_size.x <= 0.0 or _card_size.y <= 0.0:
 		return
+	if _has_artwork and _edge_shade > 0.0:
+		_draw_artwork_edges()
 	if _has_artwork and lower_shade_height > 0.0:
 		# 实际渐层高度；不能超过插画自身高度，避免小尺寸预览时越界。
 		var shade_height: float = minf(lower_shade_height, _artwork_bounds.size.y)
@@ -111,6 +119,23 @@ func _draw() -> void:
 	# 底部中央短刻线；两侧留白保留原有公开区与数值信息的主次。
 	var center_x: float = _card_size.x * 0.5
 	draw_line(Vector2(center_x - LOWER_RAIL_HALF_WIDTH, _card_size.y - rim_inset), Vector2(center_x + LOWER_RAIL_HALF_WIDTH, _card_size.y - rim_inset), Color(_trim_color, LOWER_RAIL_ALPHA), RAIL_WIDTH, true)
+
+
+## 在原画四边绘制柔和暗角；公开信息在更高层绘制，牌背仍完整遮盖该装饰。
+func _draw_artwork_edges() -> void:
+	# 单条渐暗带宽；分段数复用底部渐层，绘制范围始终位于原画矩形内。
+	var band_width: float = minf(_artwork_bounds.size.x, _artwork_bounds.size.y) * EDGE_SHADE_RATIO / float(SHADE_STEPS)
+	for step: int in range(SHADE_STEPS):
+		# 向原画中心衰减的强度；平方曲线使边缘连续过渡，中央不增加蒙层。
+		var strength: float = pow(1.0 - float(step) / float(SHADE_STEPS), 2.0) * _edge_shade
+		# 当前内缩矩形；四条不重叠的边带保证角落不会重复累积透明度。
+		var inset: Rect2 = _artwork_bounds.grow(-float(step) * band_width)
+		# 低饱和深色遮光；从宿主表面派生，不依赖任何角色或主题ID。
+		var shade: Color = Color(_surface_color.darkened(SHADE_DARKENING), strength)
+		draw_rect(Rect2(inset.position, Vector2(inset.size.x, band_width)), shade)
+		draw_rect(Rect2(Vector2(inset.position.x, inset.end.y - band_width), Vector2(inset.size.x, band_width)), shade)
+		draw_rect(Rect2(inset.position + Vector2(0.0, band_width), Vector2(band_width, inset.size.y - 2.0 * band_width)), shade)
+		draw_rect(Rect2(Vector2(inset.end.x - band_width, inset.position.y + band_width), Vector2(band_width, inset.size.y - 2.0 * band_width)), shade)
 
 
 ## 隐藏后同步归零，重新显示时不会继承离开前的半截悬停动画。

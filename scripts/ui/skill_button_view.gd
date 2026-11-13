@@ -1,6 +1,9 @@
 class_name SkillButtonView
 extends Button
 
+## 战斗专用配色适配器；不修改主菜单共享主题，也不改变技能或聊天业务状态。
+const BATTLE_STYLE: Script = preload("res://scripts/ui/battle_surface_style.gd")
+
 ## 技能选中边缘组件；只用光框和角线保留紧凑两字技能名的可读区域。
 const SELECTION_FEEDBACK: Script = preload("res://scripts/ui/selection_feedback.gd")
 
@@ -169,24 +172,24 @@ func _refresh_visual_state() -> void:
 	if not is_node_ready():
 		return
 	# 技能背景色；可发动技能使用主题强调底色，不可发动技能统一使用更暗的中性灰。
-	var background_color: Color = BattleUIStyle.get_color("skill_available_background") if is_skill_available else BattleUIStyle.get_color("disabled_button")
+	var background_color: Color = BATTLE_STYLE.get_color("skill_available_background") if is_skill_available else BATTLE_STYLE.get_color("disabled_button")
 	# 技能边框色；选中状态优先使用金色，否则按可用状态区分。
-	var border_color: Color = BattleUIStyle.get_color("accent") if is_skill_selected else (BattleUIStyle.get_color("legal_target") if is_skill_available else BattleUIStyle.get_color("disabled_button_border"))
+	var border_color: Color = BATTLE_STYLE.get_color("accent") if is_skill_selected else (BATTLE_STYLE.get_color("legal_target") if is_skill_available else BATTLE_STYLE.get_color("disabled_button_border"))
 	# 限定技禁用文字色；尚未发动仅加深红色并保持正文清晰，已经发动后改用低对比深灰文字。
-	var disabled_font_color: Color = BattleUIStyle.get_color("text_primary") if _is_limited_skill and not _is_limited_skill_used else BattleUIStyle.get_color("disabled_button_font")
+	var disabled_font_color: Color = BATTLE_STYLE.get_color("text_primary") if _is_limited_skill and not _is_limited_skill_used else BATTLE_STYLE.get_color("disabled_button_font")
 	if _is_limited_skill:
 		if _is_limited_skill_used:
-			background_color = BattleUIStyle.get_color("disabled_button").darkened(LIMITED_SKILL_USED_BACKGROUND_DARKENING)
-			border_color = BattleUIStyle.get_color("disabled_button_border").darkened(LIMITED_SKILL_USED_BORDER_DARKENING)
+			background_color = BATTLE_STYLE.get_color("disabled_button").darkened(LIMITED_SKILL_USED_BACKGROUND_DARKENING)
+			border_color = BATTLE_STYLE.get_color("disabled_button_border").darkened(LIMITED_SKILL_USED_BORDER_DARKENING)
 		elif is_skill_available:
-			background_color = BattleUIStyle.get_color("danger")
-			border_color = BattleUIStyle.get_color("danger").lightened(LIMITED_SKILL_UNAVAILABLE_DARKENING)
+			background_color = BATTLE_STYLE.get_color("danger")
+			border_color = BATTLE_STYLE.get_color("danger").lightened(LIMITED_SKILL_UNAVAILABLE_DARKENING)
 		else:
-			background_color = BattleUIStyle.get_color("danger").darkened(LIMITED_SKILL_UNAVAILABLE_DARKENING)
-			border_color = BattleUIStyle.get_color("danger").darkened(LIMITED_SKILL_UNAVAILABLE_DARKENING)
+			background_color = BATTLE_STYLE.get_color("danger").darkened(LIMITED_SKILL_UNAVAILABLE_DARKENING)
+			border_color = BATTLE_STYLE.get_color("danger").darkened(LIMITED_SKILL_UNAVAILABLE_DARKENING)
 	# 技能选中描边；限定技只替换普通状态配色，进入选牌或选目标流程后仍保留全技能统一的主题强调色。
 	if is_skill_selected:
-		border_color = BattleUIStyle.get_color("accent")
+		border_color = BATTLE_STYLE.get_color("accent")
 	# 技能描边宽度；选中时使用3像素，普通状态使用1像素。
 	var border_width: int = 3 if is_skill_selected else 1
 	# 实际按钮底色决定前景亮度；限定技的深红底与纸金普通技能可以使用不同文字色。
@@ -199,7 +202,7 @@ func _refresh_visual_state() -> void:
 	add_theme_color_override("font_disabled_color", disabled_font_color)
 	add_theme_stylebox_override("normal", BattleUIStyle.make_button(background_color, border_color, border_width, 9))
 	add_theme_stylebox_override("hover", BattleUIStyle.make_button(background_color.lightened(0.09), border_color.lightened(0.12), maxi(border_width, 2), 9) if is_skill_available else BattleUIStyle.make_button(background_color, border_color, border_width, 9))
-	add_theme_stylebox_override("pressed", BattleUIStyle.make_button(background_color.darkened(0.07), BattleUIStyle.get_color("accent"), 3, 9) if is_skill_available else BattleUIStyle.make_button(background_color, border_color, border_width, 9))
+	add_theme_stylebox_override("pressed", BattleUIStyle.make_button(background_color.darkened(0.07), BATTLE_STYLE.get_color("accent"), 3, 9) if is_skill_available else BattleUIStyle.make_button(background_color, border_color, border_width, 9))
 	add_theme_stylebox_override("disabled", BattleUIStyle.make_button(background_color, border_color, border_width, 9))
 	_refresh_selection_feedback()
 
@@ -207,7 +210,7 @@ func _refresh_visual_state() -> void:
 ## 更新纯绘制选中态；技能进入材料选择后即使暂时disabled也保持明确的选择轮廓。
 func _refresh_selection_feedback() -> void:
 	if _selection_feedback != null:
-		_selection_feedback.configure(size, is_skill_selected, BattleUIStyle.get_color("accent"))
+		_selection_feedback.configure(size, is_skill_selected, BATTLE_STYLE.get_color("accent"))
 
 
 ## 按当前活动 UI 风格重绘技能按钮；技能定义、可发动状态与选中状态保持不变。

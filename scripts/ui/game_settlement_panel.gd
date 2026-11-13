@@ -107,25 +107,25 @@ func hide_settlement() -> void:
 
 ## 刷新活动 UI 风格；动态数据行与静态表头都使用同一组主题颜色和按钮样式。
 func refresh_ui_style() -> void:
-	_frame.add_theme_stylebox_override("panel", BATTLE_STYLE.make_panel(BattleUIStyle.get_color("metal_panel"), BattleUIStyle.get_color("accent"), 2, 10))
-	_title_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
-	_close_button.add_theme_color_override("font_color", BattleUIStyle.get_color("button_font"))
-	BATTLE_STYLE.apply_interaction_button(_close_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("accent"), false)
+	_frame.add_theme_stylebox_override("panel", BATTLE_STYLE.make_panel(BATTLE_STYLE.get_color("metal_panel"), BATTLE_STYLE.get_color("accent"), 2, 10))
+	_title_label.add_theme_color_override("font_color", BATTLE_STYLE.get_color("text_primary"))
+	_close_button.add_theme_color_override("font_color", BATTLE_STYLE.get_color("button_font"))
+	BATTLE_STYLE.apply_interaction_button(_close_button, BATTLE_STYLE.get_color("panel"), BATTLE_STYLE.get_color("accent"), false)
 	if _save_replay_button != null:
 		BATTLE_STYLE.apply_interaction_button(_save_replay_button)
 	if _naming_panel != null:
-		_naming_panel.add_theme_stylebox_override("panel", BATTLE_STYLE.make_panel(BattleUIStyle.get_color("metal_panel"), BattleUIStyle.get_color("accent"), 2, 10))
-		_naming_title_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
-		_naming_hint_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_secondary"))
-		_naming_input.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary"))
-		_naming_input.add_theme_color_override("caret_color", BattleUIStyle.get_color("accent"))
+		_naming_panel.add_theme_stylebox_override("panel", BATTLE_STYLE.make_panel(BATTLE_STYLE.get_color("metal_panel"), BATTLE_STYLE.get_color("accent"), 2, 10))
+		_naming_title_label.add_theme_color_override("font_color", BATTLE_STYLE.get_color("text_primary"))
+		_naming_hint_label.add_theme_color_override("font_color", BATTLE_STYLE.get_color("text_secondary"))
+		_naming_input.add_theme_color_override("font_color", BATTLE_STYLE.get_color("text_primary"))
+		_naming_input.add_theme_color_override("caret_color", BATTLE_STYLE.get_color("accent"))
 		BATTLE_STYLE.apply_interaction_button(_naming_confirm_button)
-		BATTLE_STYLE.apply_interaction_button(_naming_cancel_button, BattleUIStyle.get_color("panel"), BattleUIStyle.get_color("border"), false)
+		BATTLE_STYLE.apply_interaction_button(_naming_cancel_button, BATTLE_STYLE.get_color("panel"), BATTLE_STYLE.get_color("border"), false)
 	for header_variant: Variant in _header_row.get_children():
 		# 当前表头标签；缺失或替换为非标签节点时忽略，保持组件可嵌入旧场景测试。
 		var header_label: Label = header_variant as Label
 		if header_label != null:
-			header_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_guide"))
+			header_label.add_theme_color_override("font_color", BATTLE_STYLE.get_color("text_guide"))
 	for row_variant: Variant in _rows_container.get_children():
 		# 当前结算行；其面板背景和内部文字都需随主题即时刷新。
 		var row: HBoxContainer = row_variant as HBoxContainer
@@ -137,7 +137,7 @@ func refresh_ui_style() -> void:
 			# 当前结算单元格；所有数据均为公开终局统计，统一使用主要文字色。
 			var cell_label: Label = cell_variant as Label
 			if cell_label != null:
-				cell_label.add_theme_color_override("font_color", BattleUIStyle.get_color("text_primary") if cell_label.get_index() == 0 else BattleUIStyle.get_color("text_secondary"))
+				cell_label.add_theme_color_override("font_color", BATTLE_STYLE.get_color("text_primary") if cell_label.get_index() == 0 else BATTLE_STYLE.get_color("text_secondary"))
 
 
 ## 清空旧行并从玩家快照创建终局统计列表；座次顺序已经由GameState快照稳定排序。
