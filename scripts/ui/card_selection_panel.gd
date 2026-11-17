@@ -75,6 +75,12 @@ const PUBLIC_PANEL_HORIZONTAL_PADDING: float = 36.0
 ## 公共展示窗口允许的最大高度；默认620像素可完整容纳最多10人时的三行牌，运行时通常无需修改。
 @export_range(360.0, 680.0, 1.0) var public_panel_max_height: float = 620.0
 
+## 公共牌池的牌面缩放；默认0.86保留可读性并为下方响应区留白，通常无需运行时修改。
+@export_range(0.65, 1.0, 0.01) var public_card_scale: float = 0.86
+
+## 公共牌池与视口边缘、下方询问区的间隔；默认12像素避免窗口贴边，通常无需运行时修改。
+@export_range(4.0, 32.0, 1.0) var public_response_gap: float = 12.0
+
 ## 目标武将名在区域选牌提示中的强调颜色；固定暖金色使目标归属在所有主题下保持可辨认，运行时通常无需动态修改。
 const TARGET_CHARACTER_NAME_COLOR: Color = Color("e4c84f")
 
@@ -142,6 +148,9 @@ var _public_layout_signature: int = 0
 ## 当前公共展示对应的本地请求 ID；同一请求重复刷新时保留玩家临时选择，切换选择者时恢复为空选择。
 var _public_request_id: int = -1
 
+## 由桌面传入的底部响应区高度；默认0表示独立使用，公共窗口布局不得进入该区域。
+var _public_response_reserved_height: float = 0.0
+
 ## 牌堆排序请求中的牌堆顶行UID；数组顺序对应界面从左到右，也对应更早到更晚的摸牌顺序。
 var _arrangement_top_uids: Array[int] = []
 
@@ -161,7 +170,10 @@ var _arrangement_bottom_row: HFlowContainer
 ## 创建可复用选择框的稳定节点结构；具体候选只在收到请求时动态生成。
 func _ready() -> void:
 	z_index = MODAL_Z_INDEX
+	# 全屏根节点只组织窗口；普通模态由遮罩拦截输入，公共牌池允许下方响应控件接收输入。
+	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	resized.connect(_refresh_public_display_layout)
 	_shade = ColorRect.new()
 	_shade.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_shade.color = BATTLE_STYLE.get_color("shade", shade_color)
@@ -250,6 +262,7 @@ func refresh_ui_style() -> void:
 
 ## 显示一条规则层选择请求；重复调用会完整替换旧候选和本地临时选择。
 func show_request(choice_request: Dictionary) -> void:
+	_shade.visible = true
 	_choice_request = choice_request.duplicate(true)
 	_public_display.clear()
 	_selected_card_uids.clear()
@@ -362,7 +375,10 @@ func _restore_standard_zone_scroll_behavior() -> void:
 
 
 ## 显示一份跨多名玩家持续存在的公共选牌快照；只有传入有效本地请求时开放牌面与确认按钮。
-func show_public_display(display_data: Dictionary, choice_request: Dictionary = {}) -> void:
+func show_public_display(display_data: Dictionary, choice_request: Dictionary = {}, reserved_bottom_height: float = 0.0) -> void:
+	_public_response_reserved_height = maxf(reserved_bottom_height, 0.0)
+	# 公共牌池与手牌响应并存，不使用全屏遮罩压暗或截获下方询问、按钮与手牌。
+	_shade.visible = false
 	# 下一份公共牌阵结构签名；领取者、提示和当前请求不属于牌面结构，变化时只需原位刷新状态。
 	var next_layout_signature: int = _get_public_layout_signature(display_data)
 	# 下一份本地请求 ID；旁观状态使用-1，轮到本地玩家时使用权威请求序号。
@@ -379,6 +395,7 @@ func show_public_display(display_data: Dictionary, choice_request: Dictionary = 
 		_refresh_public_slot_states(_public_display.get("slots", []) as Array)
 		_refresh_public_action_row()
 		_refresh_selection_state()
+		_refresh_public_display_layout()
 		return
 	_public_display = display_data.duplicate(true)
 	_choice_request = choice_request.duplicate(true)
@@ -393,17 +410,8 @@ func show_public_display(display_data: Dictionary, choice_request: Dictionary = 
 	_public_request_id = next_request_id
 	_clear_container(_zone_container)
 	_restore_standard_zone_scroll_behavior()
-	# 公共固定牌位数量；窗口宽度最多容纳4张，牌数增加时只向下扩展新行。
-	var display_slot_count: int = (_public_display.get("slots", []) as Array).size()
-	# 当前实际列数；不足4张时按真实牌数收紧，但保留最小标题宽度。
-	var column_count: int = mini(maxi(display_slot_count, 1), PUBLIC_CARD_COLUMNS)
-	# 当前实际行数；空展示保留1行最小窗口，正常五谷按4张一行向上取整。
-	var row_count: int = maxi(ceili(float(display_slot_count) / float(PUBLIC_CARD_COLUMNS)), 1)
-	# 当前公共牌阵宽度；四列时固定为468像素。
-	var public_cards_width: float = PUBLIC_CARD_SIZE.x * float(column_count) + PUBLIC_CARD_GAP * float(maxi(column_count - 1, 0))
-	# 当前公共牌阵高度；最多10名玩家时为3行共460像素。
-	var public_cards_height: float = PUBLIC_CARD_SIZE.y * float(row_count) + PUBLIC_CARD_GAP * float(maxi(row_count - 1, 0))
-	_set_frame_size(Vector2(maxf(PUBLIC_PANEL_MIN_WIDTH, public_cards_width + PUBLIC_PANEL_HORIZONTAL_PADDING), minf(public_panel_max_height, public_cards_height + PUBLIC_PANEL_CHROME_HEIGHT)))
+	# 牌池使用缩小牌面与底部预留区域计算尺寸；标准牌面尺寸仍作为布局度量基准。
+	_refresh_public_display_layout()
 	_title_label.text = str(_public_display.get("title", "公共选牌"))
 	_set_prompt_text(str(_public_display.get("prompt", "等待当前角色选择")))
 	# 当前本地可选候选；只取有效 UID，公共牌位仍由完整 slots 数组决定固定顺序。
@@ -413,6 +421,32 @@ func show_public_display(display_data: Dictionary, choice_request: Dictionary = 
 	_refresh_public_action_row()
 	_refresh_selection_state()
 	visible = true
+
+
+## 把公共牌池放在底部响应区上方；窗口超高时由既有滚动区承载，重排不重建牌位或丢失选中状态。
+func _refresh_public_display_layout() -> void:
+	if _public_display.is_empty() or _frame == null:
+		return
+	# 公共固定牌位数量；窗口宽度最多容纳4张，牌数增加时只向下扩展新行。
+	var display_slot_count: int = (_public_display.get("slots", []) as Array).size()
+	# 当前实际列数；不足4张时按真实牌数收紧，但保留最小标题宽度。
+	var column_count: int = mini(maxi(display_slot_count, 1), PUBLIC_CARD_COLUMNS)
+	# 当前实际行数；空展示保留1行最小窗口，正常五谷按4张一行向上取整。
+	var row_count: int = maxi(ceili(float(display_slot_count) / float(PUBLIC_CARD_COLUMNS)), 1)
+	# 当前公共牌阵宽度；四列时固定为468像素。
+	# 公共牌池实际尺寸按 public_card_scale 缩小，正式牌面尺寸保留为统一基准。
+	var public_cards_width: float = PUBLIC_CARD_SIZE.x * public_card_scale * float(column_count) + PUBLIC_CARD_GAP * float(maxi(column_count - 1, 0))
+	# 当前公共牌阵高度；最多10名玩家时为3行共460像素。
+	var public_cards_height: float = PUBLIC_CARD_SIZE.y * public_card_scale * float(row_count) + PUBLIC_CARD_GAP * float(maxi(row_count - 1, 0))
+	# 响应区上方的可用高度；保留上下间隔，不覆盖桌面的询问文本与按钮。
+	var available_height: float = maxf(size.y - _public_response_reserved_height - public_response_gap * 2.0, 1.0)
+	# 最终窗口尺寸；超出的牌阵保留在滚动容器内。
+	var frame_size: Vector2 = Vector2(maxf(PUBLIC_PANEL_MIN_WIDTH, public_cards_width + PUBLIC_PANEL_HORIZONTAL_PADDING), minf(minf(public_panel_max_height, available_height), public_cards_height + PUBLIC_PANEL_CHROME_HEIGHT))
+	_set_frame_size(frame_size)
+	_frame.anchor_top = 0.0
+	_frame.anchor_bottom = 0.0
+	_frame.offset_top = public_response_gap + (available_height - frame_size.y) * 0.5
+	_frame.offset_bottom = _frame.offset_top + frame_size.y
 
 
 ## 计算公共牌阵的稳定结构签名；只有固定牌位或原始牌面变化时才允许重建正式 CardView 节点。
@@ -479,6 +513,7 @@ func _refresh_public_action_row() -> void:
 ## 因此打开与关闭都不会产生任何规则动作，权威状态在前后完全一致。
 ## 记录的是牌名而不是实体牌，所以每张牌面都隐藏花色与点数，只显示牌名、类别与规则说明。
 func show_recorded_names(view_data: Dictionary) -> void:
+	_shade.visible = true
 	_choice_request.clear()
 	_public_display.clear()
 	_selected_card_uids.clear()
@@ -757,7 +792,18 @@ func _add_card_slot(card_row: Container, candidate: Dictionary, selectable: bool
 	# 固定牌位包装器；尺寸始终等于正式111×148像素牌面，领取标签覆盖牌底而不改变换行计算。
 	var wrapper: Control = Control.new()
 	wrapper.custom_minimum_size = Vector2(111.0, 148.0)
+	# 只有公共牌池使用紧凑牌面，普通区域选牌与排序窗口保持正式尺寸。
+	if create_owner_label:
+		wrapper.custom_minimum_size *= public_card_scale
 	card_row.add_child(wrapper)
+	# 缩放宿主与牌面自身的悬停动画分离，防止 CardView 恢复单位缩放时丢失公共牌池的紧凑尺寸。
+	var card_parent: Node = wrapper
+	if create_owner_label:
+		# 牌面与领取标签共用的缩放节点；仅影响表现，不参与网格的逻辑最小尺寸计算。
+		var scaled_content: Node2D = Node2D.new()
+		scaled_content.scale = Vector2.ONE * public_card_scale
+		wrapper.add_child(scaled_content)
+		card_parent = scaled_content
 	# 正式卡牌视图；正面、牌背、公共只读牌和复制虚影都复用同一场景。
 	var card_view: CardView = CARD_VIEW_SCENE.instantiate() as CardView
 	# 当前牌位实体 UID；用于连接点击信号并维护牌面映射。
@@ -769,7 +815,7 @@ func _add_card_slot(card_row: Container, candidate: Dictionary, selectable: bool
 		var definition: Dictionary = GameDatabase.get_card(str(card_data.get("definition_id", "")))
 		# 不可选的展示牌必须传入禁用暗置；公共牌被领取时改由复制虚影表达，不能叠加禁用暗置而失去归属可读性。
 		# 只读观看牌保持完整亮度；普通不可选保护牌仍使用禁用暗置，已领取公共牌继续由复制虚影表达。
-		var dim_when_disabled: bool = not taken and not bool(candidate.get("read_only_full_brightness", false))
+		var dim_when_disabled: bool = not taken and not create_owner_label and not bool(candidate.get("read_only_full_brightness", false))
 		# 牌名候选只在牌面上显示牌名相关内容；该标志由候选数据携带，普通实体牌候选不设置该字段。
 		var hide_suit_rank: bool = bool(card_data.get("hide_suit_rank", false))
 		card_view.configure(card_data, definition, false, selectable, dim_when_disabled, hide_suit_rank)
@@ -786,7 +832,7 @@ func _add_card_slot(card_row: Container, candidate: Dictionary, selectable: bool
 		card_view.hand_drag_finished.connect(_on_arrangement_drag_finished)
 	if taken:
 		card_view.modulate = taken_card_ghost_modulate
-	wrapper.add_child(card_view)
+	card_parent.add_child(card_view)
 	# 所有明置牌都转发统一悬停说明；只读、禁用和已领取虚影仍可查看，牌背不会由 CardView 发出信息。
 	card_view.information_requested.connect(information_requested.emit)
 	card_view.information_dismissed.connect(information_dismissed.emit)
@@ -807,7 +853,7 @@ func _add_card_slot(card_row: Container, candidate: Dictionary, selectable: bool
 	owner_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	owner_label.add_theme_font_size_override("font_size", 13)
 	_apply_owner_label_style(owner_label)
-	wrapper.add_child(owner_label)
+	card_parent.add_child(owner_label)
 	_owner_labels.append(owner_label)
 	_owner_labels_by_card_uid[card_uid] = owner_label
 

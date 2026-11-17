@@ -4443,7 +4443,8 @@ func _refresh_card_selection_panel() -> void:
 		return
 	if not _public_card_choice_display.is_empty():
 		# 本地存在与公共展示不同类型的内联询问时，公共窗口暂时让出手牌与按钮输入，询问结束后会从保留快照自动恢复。
-		if not _inline_card_choice.is_empty() and str((_inline_card_choice.get("context", {}) as Dictionary).get("kind", "")) != str(_public_card_choice_display.get("kind", "")):
+		# 群体锦囊的无懈询问与公共牌池并存；牌池只读，底部继续使用原有响应入口。
+		if not _inline_card_choice.is_empty() and not _is_group_trick_negation_choice(_inline_card_choice) and str((_inline_card_choice.get("context", {}) as Dictionary).get("kind", "")) != str(_public_card_choice_display.get("kind", "")):
 			card_selection_panel.close()
 			return
 		# 本地存在与公共展示不同类型的独立请求时优先显示该请求，公共牌位数据仍保留在桌面快照中。
@@ -4459,7 +4460,9 @@ func _refresh_card_selection_panel() -> void:
 			var request_kind: String = str((_modal_card_choice_request.get("context", {}) as Dictionary).get("kind", ""))
 			if request_kind == str(_public_card_choice_display.get("kind", "")):
 				interactive_request = _modal_card_choice_request.duplicate(true)
-		card_selection_panel.show_public_display(enriched_display, interactive_request)
+		# 操作区顶边以下留给询问、确认/取消与手牌；组件只接收高度，不依赖桌面的节点路径。
+		var reserved_bottom_height: float = maxf(size.y - interaction_panel.position.y, size.y - hand_panel.position.y)
+		card_selection_panel.show_public_display(enriched_display, interactive_request, reserved_bottom_height)
 		return
 	if not _modal_card_choice_request.is_empty():
 		card_selection_panel.show_request(_enrich_target_zone_card_choice_request(_modal_card_choice_request))
@@ -6555,7 +6558,20 @@ func _is_suppressed_group_trick_choice(choice_data: Dictionary) -> bool:
 
 ## 返回右侧按钮当前是否承担群体锦囊响应开关；已开启期间即使暂时没有询问也保持可取消。
 func _has_group_trick_response_button_context() -> bool:
-	return _suppressed_group_trick_uid >= 0 or _is_group_trick_negation_choice(_inline_card_choice)
+	return _suppressed_group_trick_uid >= 0 or _get_group_trick_response_card_uid() >= 0
+
+
+## 读取当前响应或公共选牌请求关联的父锦囊；选牌阶段仍可切换后续无懈响应，不把选牌误当成放弃响应。
+func _get_group_trick_response_card_uid() -> int:
+	if _is_group_trick_negation_choice(_inline_card_choice):
+		return int((_inline_card_choice.get("context", {}) as Dictionary).get("parent_card_uid", -1))
+	if not _inline_card_choice.is_empty():
+		return -1
+	# 当前公共选牌请求的只读上下文；必须与正在展示的牌池类型一致，避免接管其他模态的操作。
+	var context: Dictionary = _modal_card_choice_request.get("context", {}) as Dictionary
+	if not _public_card_choice_display.is_empty() and str(context.get("kind", "")) == str(_public_card_choice_display.get("kind", "")):
+		return int(context.get("parent_card_uid", -1))
+	return -1
 
 
 ## 切换本次群体锦囊的不响应状态；开启时同时放弃当前无懈询问，关闭时等待后续询问正常出现。
@@ -6564,14 +6580,17 @@ func _toggle_group_trick_suppression() -> void:
 		_suppressed_group_trick_uid = -1
 		_refresh_selection_text()
 		return
-	if not _is_group_trick_negation_choice(_inline_card_choice):
+	if _get_group_trick_response_card_uid() < 0:
 		return
 	# 当前无懈询问所属群体锦囊实体 UID；开关只持续到该实体离开处理区。
-	var context: Dictionary = _inline_card_choice.get("context", {}) as Dictionary
+	# 公共选牌期间使用同一权威请求的父锦囊，不能提交或取消这次选牌。
+	var context: Dictionary = (_inline_card_choice if not _inline_card_choice.is_empty() else _modal_card_choice_request).get("context", {}) as Dictionary
 	_suppressed_group_trick_uid = int(context.get("parent_card_uid", -1))
 	_refresh_group_trick_response_button()
 	# 开启后立即以空选择放弃当前询问；后续同一锦囊请求由自动提交入口继续跳过。
-	_submit_inline_card_choice([], false)
+	# 公共选牌时只切换后续无懈响应开关；当前仍需玩家正常选择展示牌。
+	if _is_group_trick_negation_choice(_inline_card_choice):
+		_submit_inline_card_choice([], false)
 
 
 ## 为已经开启不响应的后续无懈请求提交空选择；提交前复核请求仍活动且仍属于同一锦囊。

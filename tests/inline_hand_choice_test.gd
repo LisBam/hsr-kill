@@ -484,7 +484,7 @@ func _run() -> void:
 	# 全屏选择遮罩；透明度必须使用当前 UI 风格注册的统一 shade 颜色。
 	var selection_shade: ColorRect = selection_panel.get("_shade") as ColorRect
 	# 当前风格遮罩透明度；测试不再硬编码已经废弃的0.42旧主题值。
-	var expected_selection_shade_alpha: float = BattleUIStyle.get_color("shade").a
+	var expected_selection_shade_alpha: float = CardSelectionPanel.BATTLE_STYLE.get_color("shade").a
 	# 公共窗口底部操作行；旁观快照尚无本地请求时必须隐藏。
 	var public_action_row: HBoxContainer = selection_panel.get("_action_row") as HBoxContainer
 	# 公共牌位视图映射；领取牌仍以原 UID 留在固定位置。
@@ -499,6 +499,12 @@ func _run() -> void:
 		_fail("harvest_hover_information=%s" % [modal_hover_information])
 		return
 	public_hover_card.call("_on_mouse_exited")
+	# 离开只读牌的悬停动画也会恢复单位缩放；公共牌面的整体缩放必须由外层宿主持有。
+	var public_hover_tween: Tween = public_hover_card.get("_hover_tween") as Tween
+	public_hover_tween.custom_step(public_hover_card.hover_animation_seconds)
+	if public_hover_card.is_content_dimmed() or not public_hover_card.global_scale.is_equal_approx(Vector2.ONE * selection_panel.public_card_scale):
+		_fail("harvest_read_only_brightness_or_scale")
+		return
 	# 已领取展示牌视图；输入应禁用且整体透明度低于未领取牌。
 	var taken_card_view: CardView = public_card_views.get(7010) as CardView
 	# 领取者标签；固定作为牌位包装器中正式牌面之后的第二个子节点。
@@ -511,11 +517,12 @@ func _run() -> void:
 	# 公共牌阵；固定使用4列网格且不创建“展示区”标题标签。
 	var public_card_grid: GridContainer = (selection_panel.get("_zone_container") as VBoxContainer).get_child(0) as GridContainer
 	# 公共窗口实际中心；动态尺寸必须围绕主场景中心展开，不能使用左上角局部坐标跑出屏幕。
-	var expected_public_frame_position: Vector2 = (main_instance.size - selection_frame.size) * 0.5
+	# 公共模式在询问区上方居中；普通选择窗口仍保持视口中心布局。
+	var expected_public_frame_position: Vector2 = Vector2((main_instance.size.x - selection_frame.size.x) * 0.5, ((main_instance.get_node("InteractionPanel") as Control).position.y - selection_frame.size.y) * 0.5)
 	# 本地手牌面板；公共模态窗口必须位于其上方，手牌悬停放大也不能遮住五谷牌位。
 	var local_hand_panel: PanelContainer = main_instance.get_node("HandPanel") as PanelContainer
-	if not selection_panel.visible or not selection_frame.size.is_equal_approx(Vector2(385.0, 290.0)) or not selection_frame.position.is_equal_approx(expected_public_frame_position) or not is_equal_approx(selection_shade.color.a, expected_selection_shade_alpha) or public_action_row.visible or public_card_views.size() != 3 or taken_card_view.is_interactable or taken_owner_label.text != "杰帕德" or taken_card_view.modulate.a >= 0.5 or public_card_grid == null or public_card_grid.columns != 4 or local_hand_panel.z_index >= selection_panel.z_index or selection_panel.z_index <= CardView.HOVER_Z_INDEX + 1:
-		_fail("harvest_public_display visible=%s frame=%s shade=%s actions=%s cards=%d interact=%s owner=%s alpha=%s" % [selection_panel.visible, selection_frame.size, selection_shade.color.a, public_action_row.visible, public_card_views.size(), taken_card_view.is_interactable, taken_owner_label.text, taken_card_view.modulate.a])
+	if not selection_panel.visible or not selection_frame.size.is_equal_approx(Vector2(360.0, 269.28)) or not selection_frame.position.is_equal_approx(expected_public_frame_position) or not is_equal_approx(selection_shade.color.a, expected_selection_shade_alpha) or public_action_row.visible or public_card_views.size() != 3 or taken_card_view.is_interactable or taken_owner_label.text != "杰帕德" or taken_card_view.modulate.a >= 0.5 or public_card_grid == null or public_card_grid.columns != 4 or local_hand_panel.z_index >= selection_panel.z_index or selection_panel.z_index <= CardView.HOVER_Z_INDEX + 1:
+		_fail("harvest_public_display frame=%s position=%s expected=%s response=%s hand=%s shade=%s expected_shade=%s layers=%s/%s" % [selection_frame.size, selection_frame.position, expected_public_frame_position, (main_instance.get_node("InteractionPanel") as Control).position, local_hand_panel.position, selection_shade.color.a, expected_selection_shade_alpha, local_hand_panel.z_index, selection_panel.z_index])
 		return
 	# 重复公共快照；提示、牌位和归属均未变化时不得重新实例化任何正式CardView。
 	main_instance.call("_on_public_card_choice_display_changed", harvest_public_display)
@@ -540,9 +547,21 @@ func _run() -> void:
 	}
 	main_instance.call("_on_card_choice_requested", harvest_negation_request)
 	await get_tree().process_frame
-	if selection_panel.visible or int((main_instance.get("_inline_card_choice") as Dictionary).get("request_id", -1)) != 14 or (main_instance.get("_public_card_choice_display") as Dictionary).is_empty():
+	if not selection_panel.visible or public_action_row.visible or selection_shade.visible or int((main_instance.get("_inline_card_choice") as Dictionary).get("request_id", -1)) != 14 or (main_instance.get("_public_card_choice_display") as Dictionary).is_empty() or not cancel_button.is_visible_in_tree() or not end_play_button.is_visible_in_tree() or selection_frame.get_global_rect().end.y > (main_instance.get_node("InteractionPanel") as Control).global_position.y - selection_panel.public_response_gap:
 		_fail("harvest_negation_interaction_conflict")
 		return
+	# 无懈询问期间保持原牌位实例与只读权限，不能每次隐藏后重建窗口。
+	for public_card_uid_variant: Variant in initial_public_card_instance_ids:
+		# 当前固定牌位；公共显示持续复用同一组牌面节点。
+		var public_card_uid: int = int(public_card_uid_variant)
+		if (selection_panel.get("_card_views") as Dictionary)[public_card_uid].get_instance_id() != initial_public_card_instance_ids[public_card_uid] or ((selection_panel.get("_card_views") as Dictionary)[public_card_uid] as CardView).is_interactable:
+			_fail("harvest_negation_keeps_read_only_slots")
+			return
+	await _click_control(end_play_button)
+	if int(main_instance.get("_suppressed_group_trick_uid")) != 9901:
+		_fail("harvest_negation_toggle_blocked")
+		return
+	await _capture_harvest("negation")
 	# 五谷请求；用于验证展示区没有被内联分类误吞。
 	var harvest_request: Dictionary = {
 		"request_id":15,
@@ -553,7 +572,7 @@ func _run() -> void:
 		"min_select":1,
 		"max_select":1,
 		"allow_cancel":false,
-		"context":{"kind":"harvest"},
+		"context":{"kind":"harvest", "parent_card_uid":9901},
 	}
 	main_instance.call("_on_card_choice_requested", harvest_request)
 	await get_tree().process_frame
@@ -581,6 +600,38 @@ func _run() -> void:
 	if harvest_selected_uids != [7004] or not (interactive_public_card_views.get(7004) as CardView).is_card_selected or (interactive_public_card_views.get(7003) as CardView).is_card_selected:
 		_fail("harvest_single_select_replacement selected=%s first=%s second=%s" % [harvest_selected_uids, (interactive_public_card_views.get(7003) as CardView).is_card_selected, (interactive_public_card_views.get(7004) as CardView).is_card_selected])
 		return
+	# 选牌期间“不响应”始终可点击；切换开关不能提交、取消或清除当前已选展示牌。
+	await get_tree().process_frame
+	await _click_control(end_play_button)
+	await _click_control(end_play_button)
+	if int(main_instance.get("_suppressed_group_trick_uid")) != 9901 or not end_play_button.is_visible_in_tree() or int((selection_panel.get("_choice_request") as Dictionary).get("request_id", -1)) != 15 or (selection_panel.get("_selected_card_uids") as Array[int]) != [7004]:
+		_fail("harvest_choice_toggle_blocked_or_submitted")
+		return
+	await _capture_harvest("choice")
+	main_instance.set("_suppressed_group_trick_uid", -1)
+	# 十张公共牌覆盖三行以及紧凑窗口；窗口必须始终避开下方响应区，超高内容使用滚动区。
+	var large_display: Dictionary = harvest_public_display.duplicate(true)
+	for slot_index: int in range(3, 10):
+		large_display["slots"].append({"uid":8000 + slot_index, "card_data":harvest_card_data.duplicate(true), "taken_by_player_id":-1})
+	# 原视口尺寸；多尺寸几何检查后恢复，避免影响后续普通手牌用例。
+	var original_size: Vector2 = main_instance.size
+	for viewport_size: Vector2 in [Vector2(1152, 648), Vector2(1280, 720)]:
+		main_instance.size = viewport_size
+		main_instance.call("_on_public_card_choice_display_changed", large_display)
+		await get_tree().process_frame
+		await get_tree().process_frame
+		if selection_frame.get_global_rect().position.y < 0.0 or selection_frame.get_global_rect().end.y > (main_instance.get_node("InteractionPanel") as Control).global_position.y - selection_panel.public_response_gap or (selection_panel.get("_card_views") as Dictionary).size() != 10:
+			_fail("harvest_large_pool_overlaps_response:%s frame=%s" % [viewport_size, selection_frame.get_global_rect()])
+			return
+		# 超高牌池必须能滚动到最后一张牌；不能为了给响应留空间而裁掉后排候选。
+		var public_scroll: ScrollContainer = selection_panel.get("_zone_scroll") as ScrollContainer
+		public_scroll.scroll_vertical = int(public_scroll.get_v_scroll_bar().max_value)
+		await get_tree().process_frame
+		if not public_scroll.get_global_rect().grow(1.0).encloses(((selection_panel.get("_card_views") as Dictionary)[8009] as CardView).get_global_rect()):
+			_fail("harvest_last_slot_unreachable:%s" % viewport_size)
+			return
+		await _capture_harvest("large_%d" % int(viewport_size.x))
+	main_instance.size = original_size
 	# 本地普通出牌快照；权威 chooseToUse 只列出【杀】，响应专用【闪】即使轮到本人也必须保持禁用灰显。
 	var play_snapshot: Dictionary = _make_snapshot([slash_data, dodge_data], 16)
 	play_snapshot["current_player_id"] = 0
@@ -810,3 +861,35 @@ func _wait_for_equipment_animation(equipment_stack: EquipmentStackView) -> void:
 func _fail(reason: String) -> void:
 	printerr("INLINE_HAND_CHOICE_FAIL %s" % reason)
 	get_tree().quit(1)
+
+
+## 通过视口真实输入验证按钮没有被公共窗口或遮罩截获；不依赖直接发出 pressed 信号。
+func _click_control(control: Control) -> void:
+	# 控件中心的视口坐标；兼容画布拉伸后的实际按钮位置。
+	var point: Vector2 = control.get_global_transform_with_canvas() * (control.size * 0.5)
+	# 鼠标移动事件；先更新GUI命中对象。
+	var motion: InputEventMouseMotion = InputEventMouseMotion.new()
+	motion.position = point
+	get_viewport().push_input(motion, true)
+	# 左键按下；走正式GUI分发，遮罩拦截会直接导致后续状态断言失败。
+	var press: InputEventMouseButton = InputEventMouseButton.new()
+	press.position = point
+	press.button_index = MOUSE_BUTTON_LEFT
+	press.pressed = true
+	get_viewport().push_input(press, true)
+	# 左键释放；Button默认在释放时触发提交或切换。
+	var release: InputEventMouseButton = InputEventMouseButton.new()
+	release.position = point
+	release.button_index = MOUSE_BUTTON_LEFT
+	get_viewport().push_input(release, true)
+	await get_tree().process_frame
+	await get_tree().process_frame
+
+
+## 显式指定截图参数时保留五谷询问与选牌画面；普通无头回归不读取GPU。
+func _capture_harvest(file_name: String) -> void:
+	if DisplayServer.get_name() == "headless" or not OS.get_cmdline_user_args().has("--capture-harvest"):
+		return
+	await RenderingServer.frame_post_draw
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path("res://.godot/harvest_review"))
+	get_viewport().get_texture().get_image().save_png("res://.godot/harvest_review/%s.png" % file_name)
