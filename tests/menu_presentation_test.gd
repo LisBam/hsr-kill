@@ -47,6 +47,8 @@ func _run() -> void:
 	await _capture("01_home")
 	# 首页及装配器；必须仅挂载于局外根节点。
 	var menu: MainMenu = main.get_node("MainMenu") as MainMenu
+	if not _check(menu.get_node("%ModeCardsVBox") is HBoxContainer and menu.get_node("MainMenuFrame/MainMenuContent") is VBoxContainer and menu.has_node("MenuPresentation"), "主菜单必须保留横向模式卡和现有表现组件"):
+		return
 	# 表现装配器；使用属性接口测试检查器开关。
 	var presentation: Node = menu.get_node("MenuPresentation")
 	# 原始开始按钮；验证视觉按压不会改变实际布局矩形。
@@ -81,6 +83,10 @@ func _run() -> void:
 			return
 	# 原主题；测试只写入独立偏好文件，检查后恢复当前运行的展示。
 	var original_style: String = GameSettings.ui_style_id
+	# 主菜单客户区几何；切换配色后模式列表与底部操作区必须保持原位。
+	var menu_content_rect: Rect2 = (menu.get_node("MainMenuFrame/MainMenuContent") as Control).get_global_rect()
+	# 底部操作区域；主题只重绘颜色，不重新安排按钮。
+	var menu_action_rect: Rect2 = (menu.get_node("%MainMenuActionPanel") as Control).get_global_rect()
 	# 从不同主题开始触发真实选择变更，避免重复选择默认项时的幂等行为跳过保存。
 	GameSettings.set_ui_style(UIStyleRegistry.STYLE_SPACE_MONO)
 	# 两处真实设置下拉；新增主题必须同时可选且保持原风格的稳定ID。
@@ -98,6 +104,8 @@ func _run() -> void:
 			return
 		style_option.item_selected.emit(style_index)
 		await _settle(0.10)
+		if not _check((menu.get_node("MainMenuFrame/MainMenuContent") as Control).get_global_rect().is_equal_approx(menu_content_rect) and (menu.get_node("%MainMenuActionPanel") as Control).get_global_rect().is_equal_approx(menu_action_rect), "主题配色改变了主菜单布局: " + style_id):
+			return
 		if not _check(GameSettings.ui_style_id == style_id and match_style_option.selected == style_index, "菜单与战斗主题选择未同步: " + style_id):
 			return
 		# 主按钮背景；三套主题必须读取当前强调语义，不能残留上一个主题颜色。

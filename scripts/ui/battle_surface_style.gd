@@ -24,8 +24,8 @@ static func make_panel(background_color: Color = UNSET_COLOR, border_color: Colo
 	var style: StyleBoxFlat = SURFACE_STYLE.make_panel(get_color("panel") if background_color == UNSET_COLOR else background_color, border_color, border_width, corner_radius)
 	style.set_corner_radius_all(maxi(corner_radius, PANEL_RADIUS))
 	# 显式透明边框必须继续透明；叠乘透明度而不是覆盖调用方的alpha。
-	var border: Color = BattleUIStyle.get_color("border") if border_color == UNSET_COLOR else border_color
-	border.a *= BORDER_ALPHA
+	var border: Color = get_color("border") if border_color == UNSET_COLOR else border_color
+	border.a *= float(UIStyleRegistry.get_value(BattleUIStyle.get_active_style_id(), "battle_panel_border_opacity", BORDER_ALPHA))
 	style.border_color = border
 	return style
 
@@ -45,7 +45,14 @@ static func make_inset_panel(background_color: Color = UNSET_COLOR, border_color
 
 ## 长条按钮、下拉与输入框共用同一几何；各态只变颜色，不引起表单跳动。
 static func make_decade_button(background_color: Color = UNSET_COLOR, border_color: Color = UNSET_COLOR, emphasized: bool = false) -> StyleBoxFlat:
-	return SURFACE_STYLE.make_decade_button(get_color("action_button") if background_color == UNSET_COLOR else background_color, border_color, emphasized)
+	# 沿用既有按钮几何；配置历史边框透明度的主题在共享工厂之后恢复完整语义色。
+	var style: StyleBoxFlat = SURFACE_STYLE.make_decade_button(get_color("action_button") if background_color == UNSET_COLOR else background_color, border_color, emphasized)
+	# 负值表示沿用共享工厂原有边框弱化比例，只有显式配置才覆盖。
+	var border_opacity: float = float(UIStyleRegistry.get_value(BattleUIStyle.get_active_style_id(), "battle_button_border_opacity", -1.0))
+	if border_opacity >= 0.0:
+		style.border_color = get_color("accent") if border_color == UNSET_COLOR else border_color
+		style.border_color.a *= clampf(border_opacity, 0.0, 1.0)
+	return style
 
 
 ## 普通按钮样式；保留原12/8像素内容边距，用于非长条按钮的自定义状态。
@@ -53,7 +60,8 @@ static func make_button(background_color: Color = UNSET_COLOR, border_color: Col
 	# 独立按钮样式；技能和实体牌不通过本方法替换自己的语义色。
 	var style: StyleBoxFlat = BattleUIStyle.make_button(get_color("action_button") if background_color == UNSET_COLOR else background_color, border_color, border_width, corner_radius)
 	style.shadow_size = 0
-	style.border_color.a *= 0.68
+	style.border_color = get_color("border") if border_color == UNSET_COLOR else border_color
+	style.border_color.a *= float(UIStyleRegistry.get_value(BattleUIStyle.get_active_style_id(), "battle_button_border_opacity", 0.68))
 	style.anti_aliasing = true
 	return style
 

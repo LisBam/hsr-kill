@@ -138,6 +138,17 @@ func apply_ui_style(style_id: String) -> void:
 	_uses_space_grid = bool(UIStyleRegistry.get_value(style_id, "uses_space_grid", false))
 	_uses_starfield = bool(UIStyleRegistry.get_value(style_id, "uses_starfield", true))
 	_uses_scenery = bool(UIStyleRegistry.get_value(style_id, "uses_scenery", true))
+	# 战斗背景完整读取独立覆盖，允许经典使用历史炭灰/古金色而不改写主菜单纸面。
+	outer_background_color = UIStyleRegistry.get_color(style_id, "battle_outer_background", outer_background_color)
+	outer_background_secondary_color = UIStyleRegistry.get_color(style_id, "battle_outer_background_secondary", outer_background_secondary_color)
+	wood_color = UIStyleRegistry.get_color(style_id, "battle_rail", wood_color)
+	wood_highlight_color = UIStyleRegistry.get_color(style_id, "battle_rail_highlight", wood_highlight_color)
+	gold_color = UIStyleRegistry.get_color(style_id, "battle_ornament", gold_color)
+	sky_color = UIStyleRegistry.get_color(style_id, "battle_sky", sky_color)
+	star_color = UIStyleRegistry.get_color(style_id, "battle_star", star_color)
+	mountain_color = UIStyleRegistry.get_color(style_id, "battle_mountain", mountain_color)
+	building_color = UIStyleRegistry.get_color(style_id, "battle_building", building_color)
+	space_grid_color = UIStyleRegistry.get_color(style_id, "battle_space_grid", space_grid_color)
 	queue_redraw()
 
 

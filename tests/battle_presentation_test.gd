@@ -290,13 +290,14 @@ func _run() -> void:
 			_check((main.get_node("%CenterTurnLabel") as Label).get_theme_color("font_color").get_luminance() > 0.7, "深色信息栏文字不清晰")
 		if style_id == UIStyleRegistry.STYLE_CLASSIC or style_id == UIStyleRegistry.STYLE_NIGHT:
 			# 经典明亮暖色与夜间深色；背景、正文必须成组变化，身份色与原画仍来自基础主题。
+			# 经典战斗按指定历史版本恢复炭灰/古金配色；两者现在均为暗色表面与浅色正文。
 			var classic: bool = style_id == UIStyleRegistry.STYLE_CLASSIC
-			_check((BATTLE_STYLE.get_color("selection_panel").get_luminance() > 0.65) == classic, "派生主题战斗表面明度错误: " + style_id)
+			_check(BATTLE_STYLE.get_color("selection_panel").get_luminance() < 0.3, "派生主题战斗表面明度错误: " + style_id)
 			if classic:
-				_check(BATTLE_STYLE.get_color("table_surface").get_luminance() < 0.75 and BATTLE_STYLE.get_color("table_inner").get_luminance() < 0.8 and BATTLE_STYLE.get_color("selection_panel").get_luminance() < 0.85, "经典战斗大面积表面过亮")
-			_check((BATTLE_STYLE.get_color("text_secondary").get_luminance() < 0.5) == classic, "派生主题战斗文字明度错误: " + style_id)
+				_check(BATTLE_STYLE.get_color("table_surface").is_equal_approx(Color("24262b")) and BATTLE_STYLE.get_color("table_inner").is_equal_approx(Color("30333a")), "经典战斗偏离历史桌面配色")
+			_check(BATTLE_STYLE.get_color("text_secondary").get_luminance() > 0.6, "派生主题战斗文字明度错误: " + style_id)
 			_check(BattleUIStyle.get_color("identity_leader").is_equal_approx(UIStyleRegistry.get_color(UIStyleRegistry.STYLE_SPACE_MONO, "identity_leader")), "派生主题改变身份语义色")
-			_check((card.get_node("CardBody/ArtworkPlaceholder") as Label).get_theme_color("font_color").get_luminance() < 0.5, "浅色牌面占位文字不清晰: " + style_id)
+			_check((card.get_node("CardBody/ArtworkPlaceholder") as Label).get_theme_color("font_color").is_equal_approx(BattleUIStyle.get_color("card_placeholder")), "牌面占位文字未使用主题颜色: " + style_id)
 			_check((target.get_parent().get_node("Seat") as Label).get_theme_color("font_color").is_equal_approx(BATTLE_STYLE.get_color("seat_text")), "座次号未跟随主题: " + style_id)
 			information.show_character_details(snapshot["players"][0], GameDatabase.get_character("gepard"))
 			await _settle()
@@ -307,7 +308,7 @@ func _run() -> void:
 			var original_skill_description: String = themed_description.get_plain_description()
 			# 当前轮回节也必须在浅色纸面清晰；不能沿用深底上的浅金文字。
 			themed_description.configure_description("轮回技，①第一节；②第二节。", true, 0)
-			_check((Color(str(themed_description.get_rendered_segments()[1]["color"])).get_luminance() < 0.5) == classic, "派生主题轮回技高亮不清晰: " + style_id)
+			_check(Color(str(themed_description.get_rendered_segments()[1]["color"])).is_equal_approx(BATTLE_STYLE.get_color("accent")), "派生主题轮回技高亮颜色错误: " + style_id)
 			themed_description.configure_description(original_skill_description)
 			await _settle()
 			_check(information.get_character_close_button().get_theme_color("font_focus_color").is_equal_approx(BATTLE_STYLE.get_color("text_primary")), "详情关闭按钮焦点文字不清晰: " + style_id)
