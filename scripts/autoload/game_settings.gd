@@ -337,6 +337,7 @@ var ai_response_delay_seconds: float = 0.30
 var game_speed_interval_seconds: float = 0.30
 
 ## 当前 UI 风格标识；默认使用黑白太空风格，运行时可在局内设置中即时切换且不修改对局规则。
+## 默认值由注册表统一提供，当前为经典主题；已保存的有效选择在启动时优先恢复。
 var ui_style_id: String = UIStyleRegistry.DEFAULT_STYLE_ID
 
 ## 是否根据公开用牌行为自动标记其他角色身份；默认开启，可在战斗菜单即时关闭且不需要重新开局。

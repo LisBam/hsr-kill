@@ -62,6 +62,8 @@ func _run() -> void:
 	# 本测试通过正式接口和信号驱动界面；关闭真实GUI鼠标输入，避免弹窗收起时的mouse_entered覆盖合成悬停来源。
 	get_viewport().gui_disable_input = true
 	GameSettings.set("_settings_file_path", "res://.godot/battle_presentation_test.cfg")
+	# 既有深色表面断言以原纸金战斗配色为固定基线；后面的主题遍历单独检查经典和夜间。
+	GameSettings.set_ui_style(UIStyleRegistry.STYLE_SPACE_MONO)
 	await GameDatabase.wait_until_ready()
 	# 正式场景实例；禁止控制器自动发起随机对局，全部测试只消费公开夹具。
 	var main: Control = MAIN_SCENE.instantiate() as Control
@@ -289,7 +291,9 @@ func _run() -> void:
 		if style_id == UIStyleRegistry.STYLE_CLASSIC or style_id == UIStyleRegistry.STYLE_NIGHT:
 			# 经典明亮暖色与夜间深色；背景、正文必须成组变化，身份色与原画仍来自基础主题。
 			var classic: bool = style_id == UIStyleRegistry.STYLE_CLASSIC
-			_check((BATTLE_STYLE.get_color("selection_panel").get_luminance() > 0.8) == classic, "派生主题战斗表面明度错误: " + style_id)
+			_check((BATTLE_STYLE.get_color("selection_panel").get_luminance() > 0.65) == classic, "派生主题战斗表面明度错误: " + style_id)
+			if classic:
+				_check(BATTLE_STYLE.get_color("table_surface").get_luminance() < 0.75 and BATTLE_STYLE.get_color("table_inner").get_luminance() < 0.8 and BATTLE_STYLE.get_color("selection_panel").get_luminance() < 0.85, "经典战斗大面积表面过亮")
 			_check((BATTLE_STYLE.get_color("text_secondary").get_luminance() < 0.5) == classic, "派生主题战斗文字明度错误: " + style_id)
 			_check(BattleUIStyle.get_color("identity_leader").is_equal_approx(UIStyleRegistry.get_color(UIStyleRegistry.STYLE_SPACE_MONO, "identity_leader")), "派生主题改变身份语义色")
 			_check((card.get_node("CardBody/ArtworkPlaceholder") as Label).get_theme_color("font_color").get_luminance() < 0.5, "浅色牌面占位文字不清晰: " + style_id)

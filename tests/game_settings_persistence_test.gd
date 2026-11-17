@@ -46,6 +46,9 @@ func _ready() -> void:
 	var saving_settings: Node = GAME_SETTINGS_SCRIPT.new() as Node
 	saving_settings.set("_settings_file_path", TEST_SETTINGS_FILE_PATH)
 	add_child(saving_settings)
+	if str(saving_settings.get("ui_style_id")) != UIStyleRegistry.STYLE_CLASSIC or UIStyleRegistry.normalize_style_id("unknown_theme") != UIStyleRegistry.STYLE_CLASSIC:
+		_fail("default_theme_must_be_classic")
+		return
 	saving_settings.call("set_card_name_mode", GameSettings.NameMode.ORIGINAL)
 	saving_settings.call("set_ai_response_delay_seconds", 0.65)
 	saving_settings.call("set_game_speed_interval_seconds", 0.8)

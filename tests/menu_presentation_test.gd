@@ -81,11 +81,15 @@ func _run() -> void:
 			return
 	# 原主题；测试只写入独立偏好文件，检查后恢复当前运行的展示。
 	var original_style: String = GameSettings.ui_style_id
+	# 从不同主题开始触发真实选择变更，避免重复选择默认项时的幂等行为跳过保存。
+	GameSettings.set_ui_style(UIStyleRegistry.STYLE_SPACE_MONO)
 	# 两处真实设置下拉；新增主题必须同时可选且保持原风格的稳定ID。
 	var style_option: OptionButton = menu.get_node("%MainMenuUiStyleOption") as OptionButton
 	# 局内菜单共用同一注册顺序；切换后选项必须同步。
 	var match_style_option: OptionButton = main.get_node("%UiStyleOption") as OptionButton
 	if not _check(style_option.item_count == 5 and match_style_option.item_count == 5, "必须保留原三种风格并新增经典与夜间主题"):
+		return
+	if not _check(str(style_option.get_item_metadata(0)) == UIStyleRegistry.STYLE_CLASSIC and str(style_option.get_item_metadata(1)) == UIStyleRegistry.STYLE_NIGHT and str(match_style_option.get_item_metadata(0)) == UIStyleRegistry.STYLE_CLASSIC and str(match_style_option.get_item_metadata(1)) == UIStyleRegistry.STYLE_NIGHT, "经典和夜间必须位于两处主题选项的前两项"):
 		return
 	for style_id: String in UIStyleRegistry.STYLE_ORDER:
 		# 真实下拉索引；通过正式信号验证选择、活动主题与稳定标识保存链路。

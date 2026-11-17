@@ -49,6 +49,8 @@ func _ready() -> void:
 ## 检查默认窗口中的可视范围、按钮鼠标命中与底部安全区。
 func _run() -> void:
 	_begin_settings_isolation()
+	# 既有纸金配色布局断言使用稳定主题ID，不依赖可变的默认选项。
+	GameSettings.set_ui_style(UIStyleRegistry.STYLE_SPACE_MONO)
 	# 布局回归覆盖身份局十人桌与六人重开；强制身份模式，避免持久化 2v2 将人数钳为 4。
 	_original_next_match_mode = str(GameSettings.next_match_mode)
 	GameSettings.set_next_match_mode(GameSettings.MATCH_MODE_IDENTITY)
@@ -177,7 +179,7 @@ func _run() -> void:
 	# 程序化背景组件；黑白太空风格不再绘制导航网格，只保留星点、轨道和远景剪影。
 	# 崩铁风格关闭旧星点、山脊和建筑剪影，仅保留暖白桌面上的低透明度金色轨道纹样。
 	var reference_backdrop: ReferenceBackdrop = main_instance.get_node("ReferenceBackdrop") as ReferenceBackdrop
-	if GameSettings.ui_style_id != UIStyleRegistry.DEFAULT_STYLE_ID or ui_style_option.item_count != UIStyleRegistry.STYLE_ORDER.size() or ui_style_option.get_item_text(0) != "星穹 · 纸金" or ui_style_option.get_item_text(1) != "暖木家园" or ui_style_option.get_item_text(2) != "高级黑金" or str(ui_style_option.get_item_metadata(2)) != UIStyleRegistry.STYLE_PREMIUM_BLACK_GOLD or str(ui_style_option.get_item_metadata(ui_style_option.selected)) != UIStyleRegistry.STYLE_SPACE_MONO or not (top_info_panel.get_theme_stylebox("panel") as StyleBoxFlat).border_color.is_equal_approx(Color(UIStyleRegistry.get_color(UIStyleRegistry.STYLE_SPACE_MONO, "border"), 0.42)) or not is_zero_approx(backdrop_shade.color.a) or bool(reference_backdrop.get("_uses_space_grid")) or bool(reference_backdrop.get("_uses_starfield")) or bool(reference_backdrop.get("_uses_scenery")) or not is_equal_approx(reference_backdrop.table_inset, 14.0) or not is_equal_approx(reference_backdrop.rail_width, 6.0):
+	if GameSettings.ui_style_id != UIStyleRegistry.STYLE_SPACE_MONO or ui_style_option.item_count != UIStyleRegistry.STYLE_ORDER.size() or ui_style_option.get_item_text(0) != "经典主题" or ui_style_option.get_item_text(1) != "夜间主题" or ui_style_option.get_item_text(2) != "星穹 · 纸金" or str(ui_style_option.get_item_metadata(4)) != UIStyleRegistry.STYLE_PREMIUM_BLACK_GOLD or str(ui_style_option.get_item_metadata(ui_style_option.selected)) != UIStyleRegistry.STYLE_SPACE_MONO or not (top_info_panel.get_theme_stylebox("panel") as StyleBoxFlat).border_color.is_equal_approx(Color(UIStyleRegistry.get_color(UIStyleRegistry.STYLE_SPACE_MONO, "border"), 0.42)) or not is_zero_approx(backdrop_shade.color.a) or bool(reference_backdrop.get("_uses_space_grid")) or bool(reference_backdrop.get("_uses_starfield")) or bool(reference_backdrop.get("_uses_scenery")) or not is_equal_approx(reference_backdrop.table_inset, 14.0) or not is_equal_approx(reference_backdrop.rail_width, 6.0):
 		_fail("default_ui_style:%s/%d/%d" % [GameSettings.ui_style_id, ui_style_option.item_count, ui_style_option.selected])
 		return
 	# 黑白太空主题的主要界面语义键；这些颜色必须保持无色相黑白灰，玩法语义色由独立键保留。

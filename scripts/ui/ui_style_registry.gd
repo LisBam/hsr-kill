@@ -24,10 +24,11 @@ const STYLE_NIGHT: String = "night"
 ## 当前默认视觉提取参考界面的黑色厚框、雾面深灰内容区与低饱和金色装饰；浅色只保留给卡牌和装备信息面，避免大面积亮底抢夺焦点。
 ## 纸金视觉以米白内容面、炭黑导航和香槟金强调形成层级；旧描述保留作历史语义说明，实际取值以配色表为准。
 ## 战斗窗口单独使用battle_前缀的深石墨表面与暗金按钮；局外纸面配色独立保留。
-const DEFAULT_STYLE_ID: String = STYLE_SPACE_MONO
+## 默认采用经典主题；首次启动、缺失或非法设置均回退经典，已保存的有效主题继续按稳定ID恢复。
+const DEFAULT_STYLE_ID: String = STYLE_CLASSIC
 
 ## 设置菜单中的固定风格顺序；默认风格置于首项，后续新增风格只需在注册表追加标识与配色。
-const STYLE_ORDER: Array[String] = [STYLE_SPACE_MONO, STYLE_DECADE_WOOD, STYLE_PREMIUM_BLACK_GOLD, STYLE_CLASSIC, STYLE_NIGHT]
+const STYLE_ORDER: Array[String] = [STYLE_CLASSIC, STYLE_NIGHT, STYLE_SPACE_MONO, STYLE_DECADE_WOOD, STYLE_PREMIUM_BLACK_GOLD]
 
 ## 风格显示名称；仅用于设置菜单与文档展示，不参与配色查询或场景判断。
 const STYLE_DISPLAY_NAMES: Dictionary = {
@@ -212,45 +213,47 @@ const STYLE_PALETTES: Dictionary = {
 	},
 	STYLE_CLASSIC: {
 		# 菜单保持基础主题；以下战斗覆盖让纸面、暖金按钮与深色正文保持一致。
-		"battle_accent": Color("866737"),
-		"battle_table_surface": Color("e7e5e1"),
-		"battle_table_inner": Color("f5f2eb"),
-		"battle_table_text": Color("615c53"),
-		"battle_table_guide": Color("866737"),
-		"battle_seat_text": Color("866737"),
+		# 大面积表面使用低亮度暖灰与米褐，面板略亮于桌面，正文和金色引导同步压深以保持阅读对比。
+		"battle_border": Color("99866a"),
+		"battle_accent": Color("70542f"),
+		"battle_table_surface": Color("bdb3a1"),
+		"battle_table_inner": Color("d0c6b3"),
+		"battle_table_text": Color("514a3f"),
+		"battle_table_guide": Color("70542f"),
+		"battle_seat_text": Color("70542f"),
 		"battle_ornament_opacity": 0.07,
-		"battle_panel": Color("faf8f3"),
-		"battle_metal_panel": Color("f5f2eb"),
-		"battle_jade_panel": Color("eeebe4"),
-		"battle_secondary_button": Color("eee9df"),
-		"battle_action_button": Color("e6d4ae"),
-		"battle_primary_button": Color("d5b67a"),
-		"battle_disabled_button": Color("dfdcd5"),
-		"battle_disabled_button_border": Color("cbc6bc"),
-		"battle_disabled_button_font": Color("878075"),
+		"battle_panel": Color("ddd4c3"),
+		"battle_metal_panel": Color("d2c7b3"),
+		"battle_jade_panel": Color("c9bea9"),
+		"battle_secondary_button": Color("cbbfa9"),
+		"battle_action_button": Color("c5af83"),
+		"battle_primary_button": Color("b59a64"),
+		"battle_disabled_button": Color("b9b09f"),
+		"battle_disabled_button_border": Color("a49a85"),
+		"battle_disabled_button_font": Color("716a5d"),
 		"battle_button_font": Color("322f2a"),
 		"battle_button_hover_font": Color("171613"),
 		"battle_button_pressed_font": Color("2a251c"),
-		"battle_text_primary": Color("292824"),
-		"battle_text_secondary": Color("615c53"),
-		"battle_text_muted": Color("797267"),
-		"battle_text_guide": Color("866737"),
-		"battle_skill_available_background": Color("ead5a8"),
-		"battle_skill_idle_background": Color("e6e1d7"),
-		"battle_skill_idle_border": Color("b8ab94"),
-		"battle_selection_panel": Color("f8f5ee"),
-		"battle_selection_section": Color("8b6d38"),
-		"battle_end_play_button": Color("eed3c9"),
-		"battle_suppressed_button": Color("ded9d0"),
-		"battle_suppressed_border": Color("a69c8b"),
+		"battle_text_primary": Color("302b23"),
+		"battle_text_secondary": Color("514a3f"),
+		"battle_text_muted": Color("6c6455"),
+		"battle_text_guide": Color("70542f"),
+		"battle_skill_available_background": Color("cbb182"),
+		"battle_skill_idle_background": Color("c5bba8"),
+		"battle_skill_idle_border": Color("99866a"),
+		"battle_selection_panel": Color("dbd1be"),
+		"battle_selection_section": Color("70542f"),
+		"battle_end_play_button": Color("c8a599"),
+		"battle_suppressed_button": Color("b9af9b"),
+		"battle_suppressed_border": Color("998d77"),
 		# 装备栏属于牌桌表面；有牌和空槽均使用暖色底与深色文字。
-		"equipment_background": Color("f5f2eb"),
-		"equipment_hover_background": Color("eadfc8"),
-		"equipment_empty_background": Color("e6e1d7"),
-		"equipment_border": Color("b9a47d"),
-		"equipment_empty_border": Color("b8ab94"),
+		"equipment_background": Color("d2c7b3"),
+		"equipment_hover_background": Color("dacbad"),
+		"equipment_empty_background": Color("c5bba8"),
+		"equipment_border": Color("99866a"),
+		"equipment_empty_border": Color("a99a80"),
 		"equipment_text": Color("302d29"),
-		"equipment_empty_text": Color("615c53"),
+		"equipment_empty_text": Color("514a3f"),
 	},
 	STYLE_NIGHT: {
 		# 战斗配色完整继承基础主题；菜单采用相同的石墨表面、浅灰正文和低饱和暖金。
