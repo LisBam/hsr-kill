@@ -1,6 +1,9 @@
 class_name MainMenu
 extends Control
 
+## 内容数据库未准备好时的统一提示；默认使用简短单行文案，加载完成后仅清除该提示。
+const DATABASE_LOADING_STATUS_TEXT: String = "正在加载中..."
+
 ## 局外样式工厂；只改变菜单表现，正式牌面与战斗界面保持独立。
 const MENU_STYLE: Script = preload("res://scripts/ui/menu_visual_style.gd")
 
@@ -397,6 +400,8 @@ var _database_request_version: int = 0
 
 ## 初始化主菜单交互与全局设置同步；主菜单进入场景后始终覆盖尚未开局的牌桌。
 func _ready() -> void:
+	# 状态文字需要更多宽度时只向左扩展，保持右侧操作按钮的位置与点击区域稳定。
+	_action_panel.grow_horizontal = Control.GROW_DIRECTION_BEGIN
 	# 当前菜单绘制与输入层；提升到同级节点最前方，确保选将遮罩和局内菜单不会遮挡启动入口。
 	call_deferred("_move_to_input_front")
 	_build_mode_details_interface()
@@ -524,7 +529,7 @@ func _ready() -> void:
 
 ## 完成内容加载后清除等待提示；其他状态或错误提示保留，不覆盖后续操作结果。
 func _on_database_ready() -> void:
-	if _menu_status_label.text == "正在加载游戏内容，请稍候…":
+	if _menu_status_label.text == DATABASE_LOADING_STATUS_TEXT:
 		_show_status("", false)
 
 
@@ -1304,7 +1309,7 @@ func _open_online_settings() -> void:
 	# 当前请求序号；等待期间玩家切换入口时不再执行旧请求。
 	var request_version: int = _database_request_version
 	if not GameDatabase.is_database_ready():
-		_show_status("正在加载游戏内容，请稍候…", false)
+		_show_status(DATABASE_LOADING_STATUS_TEXT, false)
 		await GameDatabase.wait_until_ready()
 		if not is_inside_tree() or request_version != _database_request_version:
 			return
@@ -1329,7 +1334,7 @@ func _open_all_cards() -> void:
 	# 当前请求序号；等待期间玩家切换入口时不再执行旧请求。
 	var request_version: int = _database_request_version
 	if not GameDatabase.is_database_ready():
-		_show_status("正在加载游戏内容，请稍候…", false)
+		_show_status(DATABASE_LOADING_STATUS_TEXT, false)
 		await GameDatabase.wait_until_ready()
 		if not is_inside_tree() or request_version != _database_request_version:
 			return
@@ -1353,7 +1358,7 @@ func _open_match_replay() -> void:
 	# 当前请求序号；等待期间玩家切换入口时不再执行旧请求。
 	var request_version: int = _database_request_version
 	if not GameDatabase.is_database_ready():
-		_show_status("正在加载游戏内容，请稍候…", false)
+		_show_status(DATABASE_LOADING_STATUS_TEXT, false)
 		await GameDatabase.wait_until_ready()
 		if not is_inside_tree() or request_version != _database_request_version:
 			return
@@ -1397,7 +1402,7 @@ func _open_lan_panel() -> void:
 	# 当前请求序号；等待期间玩家切换入口时不再执行旧请求。
 	var request_version: int = _database_request_version
 	if not GameDatabase.is_database_ready():
-		_show_status("正在加载游戏内容，请稍候…", false)
+		_show_status(DATABASE_LOADING_STATUS_TEXT, false)
 		await GameDatabase.wait_until_ready()
 		if not is_inside_tree() or request_version != _database_request_version:
 			return
@@ -1490,7 +1495,7 @@ func _request_start_game() -> void:
 	# 当前请求序号；等待期间玩家切换入口时不再执行旧请求。
 	var request_version: int = _database_request_version
 	if not GameDatabase.is_database_ready():
-		_show_status("正在加载游戏内容，请稍候…", false)
+		_show_status(DATABASE_LOADING_STATUS_TEXT, false)
 		await GameDatabase.wait_until_ready()
 		if not is_inside_tree() or request_version != _database_request_version:
 			return
@@ -1720,6 +1725,8 @@ func _exit_tree() -> void:
 ## 在底部操作栏更新状态文本与语义色；主题变化后仍通过错误标记恢复正确颜色。
 func _show_status(message: String, is_error: bool) -> void:
 	_status_is_error = is_error
+	# 加载文案使用字体计算出的完整最小宽度；其他状态仍可省略，避免长错误信息撑大操作栏。
+	_menu_status_label.text_overrun_behavior = TextServer.OVERRUN_NO_TRIMMING if message == DATABASE_LOADING_STATUS_TEXT else TextServer.OVERRUN_TRIM_ELLIPSIS
 	_menu_status_label.visible = not message.is_empty()
 	_menu_status_label.text = message
 	_menu_status_label.add_theme_color_override("font_color", BattleUIStyle.get_color("danger") if is_error else BattleUIStyle.get_color("text_secondary"))

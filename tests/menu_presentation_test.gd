@@ -47,6 +47,26 @@ func _run() -> void:
 	await _capture("01_home")
 	# 首页及装配器；必须仅挂载于局外根节点。
 	var menu: MainMenu = main.get_node("MainMenu") as MainMenu
+	# 加载前的三个操作按钮矩形；加载提示的最小宽度不得推动按钮或改变点击范围。
+	var action_button_rects: Dictionary = {}
+	for button_name: String in ["MainMenuSettingsButton", "MainMenuLanButton", "StartGameButton"]:
+		action_button_rects[button_name] = (menu.get_node("%" + button_name) as Control).get_global_rect()
+	# 内容加载提示；真实布局必须为指定文案保留足够宽度，且不遮挡右侧设置按钮。
+	menu.call("_show_status", MainMenu.DATABASE_LOADING_STATUS_TEXT, false)
+	await get_tree().process_frame
+	# 状态标签；用实际字体测量完整字符串，而不是只检查节点是否可见。
+	var loading_status: Label = menu.get_node("%MainMenuStatusLabel") as Label
+	# 设置按钮；状态标签扩宽后必须保持独立点击区域。
+	var settings_button: Button = menu.get_node("%MainMenuSettingsButton") as Button
+	if not _check(loading_status.text == "正在加载中..." and loading_status.size.x >= loading_status.get_theme_font("font").get_string_size(loading_status.text, HORIZONTAL_ALIGNMENT_LEFT, -1, loading_status.get_theme_font_size("font_size")).x and not loading_status.get_global_rect().intersects(settings_button.get_global_rect()), "加载提示被截断或遮挡按钮"):
+		return
+	await _capture("loading_status")
+	for button_name: String in action_button_rects:
+		if not _check((menu.get_node("%" + button_name) as Control).get_global_rect().is_equal_approx(action_button_rects[button_name]), "加载提示改变了操作按钮位置: " + button_name):
+			return
+	menu.call("_on_database_ready")
+	if not _check(not loading_status.visible, "加载完成后应清除加载提示"):
+		return
 	if not _check(menu.get_node("%ModeCardsVBox") is HBoxContainer and menu.get_node("MainMenuFrame/MainMenuContent") is VBoxContainer and menu.has_node("MenuPresentation"), "主菜单必须保留横向模式卡和现有表现组件"):
 		return
 	# 表现装配器；使用属性接口测试检查器开关。
