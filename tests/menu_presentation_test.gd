@@ -81,21 +81,50 @@ func _run() -> void:
 			return
 	# 原主题；测试只写入独立偏好文件，检查后恢复当前运行的展示。
 	var original_style: String = GameSettings.ui_style_id
+	# 两处真实设置下拉；新增主题必须同时可选且保持原风格的稳定ID。
+	var style_option: OptionButton = menu.get_node("%MainMenuUiStyleOption") as OptionButton
+	# 局内菜单共用同一注册顺序；切换后选项必须同步。
+	var match_style_option: OptionButton = main.get_node("%UiStyleOption") as OptionButton
+	if not _check(style_option.item_count == 5 and match_style_option.item_count == 5, "必须保留原三种风格并新增经典与夜间主题"):
+		return
 	for style_id: String in UIStyleRegistry.STYLE_ORDER:
-		GameSettings.set_ui_style(style_id)
+		# 真实下拉索引；通过正式信号验证选择、活动主题与稳定标识保存链路。
+		var style_index: int = UIStyleRegistry.STYLE_ORDER.find(style_id)
+		if not _check(str(style_option.get_item_metadata(style_index)) == style_id and style_option.get_item_text(style_index) == UIStyleRegistry.get_display_name(style_id), "主题选项登记错误: " + style_id):
+			return
+		style_option.item_selected.emit(style_index)
 		await _settle(0.10)
+		if not _check(GameSettings.ui_style_id == style_id and match_style_option.selected == style_index, "菜单与战斗主题选择未同步: " + style_id):
+			return
 		# 主按钮背景；三套主题必须读取当前强调语义，不能残留上一个主题颜色。
 		var start_style: StyleBoxFlat = start.get_theme_stylebox("normal") as StyleBoxFlat
 		if not _check(start_style.bg_color.is_equal_approx(BattleUIStyle.get_color("accent")), "主按钮主题未同步: " + style_id):
 			return
+		if style_id == UIStyleRegistry.STYLE_CLASSIC or style_id == UIStyleRegistry.STYLE_NIGHT:
+			# 派生主题的实际主菜单底色与正文；亮暗必须同时切换，不能只改背景。
+			var menu_surface: ColorRect = menu.get_node("%MainMenuBackgroundSurface") as ColorRect
+			if not _check(menu_surface.color.is_equal_approx(BattleUIStyle.get_color("table_surface")) and (menu.get_node("%MainMenuModeTitle") as Label).get_theme_color("font_color").is_equal_approx(BattleUIStyle.get_color("text_primary")), "派生主题菜单未刷新: " + style_id):
+				return
+			GameSettings.flush_pending_settings()
+			# 独立测试配置；验证新稳定ID可持久化，旧设置无需迁移。
+			var saved_settings: ConfigFile = ConfigFile.new()
+			if not _check(saved_settings.load(GameSettings.get_settings_file_path()) == OK and str(saved_settings.get_value(GameSettings.GAMEPLAY_SETTINGS_SECTION, "ui_style_id", "")) == style_id, "派生主题未保存: " + style_id):
+				return
 		await _capture("theme_" + style_id)
 	GameSettings.set_ui_style(original_style)
 	await _settle(0.10)
 	# 七个模式快速切换；重点检查可打断Tween不留下摘要半透明状态。
 	var mode_names: Array[String] = ["IdentityModeButton", "DouDizhuModeButton", "Team2v2ModeButton", "WheelDuelModeButton", "OpportunityBrawlModeButton", "ConquestModeButton", "WinnerTakesAllModeButton"]
-	for mode_name: String in mode_names:
-		(menu.get_node("%" + mode_name) as Button).pressed.emit()
+	# 与模式卡顺序对应的摘要名称；切换时只显示当前名称，不显示附加说明。
+	# 摘要同时保留一行简短介绍，规则提示仍隐藏。
+	var mode_titles: Array[String] = ["身份模式", "斗地主", "2v2", "1v1车轮战", "机缘大乱斗", "过关斩将", "胜者为王"]
+	if not _check((menu.get_node("%MainMenuModeListTitle") as Label).text == "模式选择", "模式列表标题必须简洁显示模式选择"):
+		return
+	for index: int in range(mode_names.size()):
+		(menu.get_node("%" + mode_names[index]) as Button).pressed.emit()
 		await get_tree().process_frame
+		if not _check((menu.get_node("%MainMenuModeTitle") as Label).text == mode_titles[index] and (menu.get_node("%MainMenuModeDescription") as Label).visible and not (menu.get_node("%MainMenuModeDescription") as Label).text.is_empty() and not (menu.get_node("%MainMenuModeRuleHint") as Label).visible, "模式摘要必须显示名称和简介两行: " + mode_names[index]):
+			return
 	await _settle()
 	# 当前摘要；模式状态仍由原业务写入GameSettings。
 	var summary: Control = menu.get_node("%MainMenuModeSummaryPanel") as Control
@@ -186,5 +215,5 @@ func _run() -> void:
 		return
 	main.queue_free()
 	await get_tree().process_frame
-	print("MENU_PRESENTATION_PASS: pages, modes, three themes, input geometry, modal cancellation, gallery, replay, lobby reuse, battle isolation")
+	print("MENU_PRESENTATION_PASS: pages, modes, all themes, input geometry, modal cancellation, gallery, replay, lobby reuse, battle isolation")
 	get_tree().quit(0)

@@ -14,6 +14,12 @@ const STYLE_DECADE_WOOD: String = "decade_wood"
 ## 高级黑金风格的稳定标识；用于承载参考图的蓝黑框架、石墨灰层级、暗铜细边与灰米文字语义。
 const STYLE_PREMIUM_BLACK_GOLD: String = "premium_black_gold"
 
+## 经典主题稳定标识；沿用纸金主菜单，战斗表面与正文同步使用暖色纸面，运行时由设置菜单选择。
+const STYLE_CLASSIC: String = "classic"
+
+## 夜间主题稳定标识；保留纸金的深色战斗配色，并让局外菜单使用同一石墨色系。
+const STYLE_NIGHT: String = "night"
+
 ## 新安装与未识别设置使用的默认风格；黑白太空风格强调近黑背景、银白边框与星空层次。
 ## 当前默认视觉提取参考界面的黑色厚框、雾面深灰内容区与低饱和金色装饰；浅色只保留给卡牌和装备信息面，避免大面积亮底抢夺焦点。
 ## 纸金视觉以米白内容面、炭黑导航和香槟金强调形成层级；旧描述保留作历史语义说明，实际取值以配色表为准。
@@ -21,13 +27,21 @@ const STYLE_PREMIUM_BLACK_GOLD: String = "premium_black_gold"
 const DEFAULT_STYLE_ID: String = STYLE_SPACE_MONO
 
 ## 设置菜单中的固定风格顺序；默认风格置于首项，后续新增风格只需在注册表追加标识与配色。
-const STYLE_ORDER: Array[String] = [STYLE_SPACE_MONO, STYLE_DECADE_WOOD, STYLE_PREMIUM_BLACK_GOLD]
+const STYLE_ORDER: Array[String] = [STYLE_SPACE_MONO, STYLE_DECADE_WOOD, STYLE_PREMIUM_BLACK_GOLD, STYLE_CLASSIC, STYLE_NIGHT]
 
 ## 风格显示名称；仅用于设置菜单与文档展示，不参与配色查询或场景判断。
 const STYLE_DISPLAY_NAMES: Dictionary = {
 	STYLE_SPACE_MONO: "星穹 · 纸金",
 	STYLE_DECADE_WOOD: "暖木家园",
 	STYLE_PREMIUM_BLACK_GOLD: "高级黑金",
+	STYLE_CLASSIC: "经典主题",
+	STYLE_NIGHT: "夜间主题",
+}
+
+## 派生主题的基础配色；只允许一层继承，未覆盖语义复用原主题，避免复制身份色、牌面和原画参数。
+const STYLE_BASES: Dictionary = {
+	STYLE_CLASSIC: STYLE_SPACE_MONO,
+	STYLE_NIGHT: STYLE_SPACE_MONO,
 }
 
 ## 全部 UI 风格配色；键名表示长期稳定的视觉语义，组件只能按语义取色，不能依赖具体主题名称。
@@ -57,6 +71,7 @@ const STYLE_PALETTES: Dictionary = {
 		"battle_table_inner": Color("343c43"),
 		"battle_table_text": Color("d5cebf"),
 		"battle_table_guide": Color("d5b67a"),
+		"battle_seat_text": Color("f0b52f"),
 		"battle_ornament_opacity": 0.07,
 		"battle_panel": Color("292f35"),
 		# 以下颜色只供战斗适配器消费；首页、设置、图鉴继续读取原有无前缀语义。
@@ -194,6 +209,84 @@ const STYLE_PALETTES: Dictionary = {
 		"uses_space_grid": false,
 		"uses_starfield": false,
 		"uses_scenery": false,
+	},
+	STYLE_CLASSIC: {
+		# 菜单保持基础主题；以下战斗覆盖让纸面、暖金按钮与深色正文保持一致。
+		"battle_accent": Color("866737"),
+		"battle_table_surface": Color("e7e5e1"),
+		"battle_table_inner": Color("f5f2eb"),
+		"battle_table_text": Color("615c53"),
+		"battle_table_guide": Color("866737"),
+		"battle_seat_text": Color("866737"),
+		"battle_ornament_opacity": 0.07,
+		"battle_panel": Color("faf8f3"),
+		"battle_metal_panel": Color("f5f2eb"),
+		"battle_jade_panel": Color("eeebe4"),
+		"battle_secondary_button": Color("eee9df"),
+		"battle_action_button": Color("e6d4ae"),
+		"battle_primary_button": Color("d5b67a"),
+		"battle_disabled_button": Color("dfdcd5"),
+		"battle_disabled_button_border": Color("cbc6bc"),
+		"battle_disabled_button_font": Color("878075"),
+		"battle_button_font": Color("322f2a"),
+		"battle_button_hover_font": Color("171613"),
+		"battle_button_pressed_font": Color("2a251c"),
+		"battle_text_primary": Color("292824"),
+		"battle_text_secondary": Color("615c53"),
+		"battle_text_muted": Color("797267"),
+		"battle_text_guide": Color("866737"),
+		"battle_skill_available_background": Color("ead5a8"),
+		"battle_skill_idle_background": Color("e6e1d7"),
+		"battle_skill_idle_border": Color("b8ab94"),
+		"battle_selection_panel": Color("f8f5ee"),
+		"battle_selection_section": Color("8b6d38"),
+		"battle_end_play_button": Color("eed3c9"),
+		"battle_suppressed_button": Color("ded9d0"),
+		"battle_suppressed_border": Color("a69c8b"),
+		# 装备栏属于牌桌表面；有牌和空槽均使用暖色底与深色文字。
+		"equipment_background": Color("f5f2eb"),
+		"equipment_hover_background": Color("eadfc8"),
+		"equipment_empty_background": Color("e6e1d7"),
+		"equipment_border": Color("b9a47d"),
+		"equipment_empty_border": Color("b8ab94"),
+		"equipment_text": Color("302d29"),
+		"equipment_empty_text": Color("615c53"),
+	},
+	STYLE_NIGHT: {
+		# 战斗配色完整继承基础主题；菜单采用相同的石墨表面、浅灰正文和低饱和暖金。
+		"outer_background": Color("191e24"),
+		"outer_background_secondary": Color("191e24"),
+		"table_surface": Color("191e24"),
+		"table_inner": Color("343c43"),
+		"rail": Color("242b32"),
+		"rail_highlight": Color("746c5c"),
+		"sky": Color("191e24"),
+		"mountain": Color("242b32"),
+		"building": Color("191e24"),
+		"panel": Color("292f35"),
+		"metal_panel": Color("242b32"),
+		"jade_panel": Color("263238"),
+		"navigation_button": Color("242b32"),
+		"mode_button": Color("292f35"),
+		"secondary_button": Color("343c43"),
+		"action_button": Color("363b40"),
+		"disabled_button": Color("262b30"),
+		"disabled_button_border": Color("474d50"),
+		"disabled_button_font": Color("939899"),
+		"button_font": Color("e8e1d4"),
+		"button_hover_font": Color("faf6ed"),
+		"button_pressed_font": Color("e8e1d4"),
+		"text_primary": Color("e3ddd1"),
+		"text_secondary": Color("bbb7ae"),
+		"text_muted": Color("989d9d"),
+		"text_guide": Color("cfb684"),
+		# 实体牌仍为浅色纸面；其插画占位文字不能使用深色窗口上的浅灰文字。
+		"card_placeholder": Color("797267"),
+		"legal_target": Color("d5b67a"),
+		"selection_panel": Color("242b32"),
+		"selection_section": Color("cfb684"),
+		"tech_panel": Color("242b32"),
+		"tech_grid": Color("343c43"),
 	},
 	STYLE_DECADE_WOOD: {
 		"table_inset": 18.0,
@@ -447,7 +540,11 @@ static func get_value(style_id: String, key: String, fallback: Variant = null) -
 	var normalized_style_id: String = normalize_style_id(style_id)
 	# 当前风格配色字典；注册表常量只读，调用方只取得单个值而不持有整个字典引用。
 	var palette: Dictionary = STYLE_PALETTES.get(normalized_style_id, {}) as Dictionary
-	return palette.get(key, fallback)
+	if palette.has(key):
+		return palette[key]
+	# 基础配色只读回退；显式false、零和透明色均由上面的has判断保留，不被继承值覆盖。
+	var base_palette: Dictionary = STYLE_PALETTES.get(STYLE_BASES.get(normalized_style_id, ""), {}) as Dictionary
+	return base_palette.get(key, fallback)
 
 
 ## 返回指定语义颜色；缺失或类型错误时使用调用方提供的安全颜色。

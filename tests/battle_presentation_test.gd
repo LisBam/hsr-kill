@@ -5,6 +5,8 @@ extends Node
 
 ## 正式主场景；使用同一资源测试装配，避免复制一套仅测试可用的UI。
 const MAIN_SCENE: PackedScene = preload("res://scenes/main.tscn")
+## 战斗文字语义；用于检查局内技能说明没有误用局外纸面文字色。
+const BATTLE_STYLE: Script = preload("res://scripts/ui/battle_surface_style.gd")
 ## 表现稳定等待时间；覆盖最长0.22秒入场与两次布局，不依赖对局速度。
 const SETTLE_SECONDS: float = 0.32
 ## 异步悬停验证的最长真实等待时间；默认5000毫秒，容纳图形首帧编译与两次布局，但不放宽最终状态断言。
@@ -197,7 +199,33 @@ func _run() -> void:
 			break
 		await get_tree().process_frame
 	_check(int(information.get("_hover_source_id")) == 123456 and hover_panel.visible and is_equal_approx(hover_panel.modulate.a, 1.0), "信息框测量与淡入互相覆盖（visible=%s alpha=%s source=%s）" % [hover_panel.visible, hover_panel.modulate.a, information.get("_hover_source_id")])
+	# 普通悬停说明；正文颜色必须来自战斗面板语义。
+	var hover_description: SkillDescriptionView = information.get("_hover_description_label") as SkillDescriptionView
+	_check(hover_description.use_battle_colors and Color(str(hover_description.get_rendered_segments()[0]["color"])).is_equal_approx(BATTLE_STYLE.get_color("text_secondary")), "普通悬停说明未使用战斗文字色")
 	information.hide_hover_information(123456)
+	# 结构化武将悬停资料；独立创建的技能说明同样应使用局内颜色。
+	information.show_hover_information({"title":"测试武将", "description_sections":[{"title":"测试技能", "description":"普通技能说明"}]}, target_rect, 123457)
+	# 等待悬停延迟和布局完成，避免在技能标签创建之前检查。
+	var structured_hover_deadline_msec: int = Time.get_ticks_msec() + HOVER_SETTLE_TIMEOUT_MSEC
+	while Time.get_ticks_msec() < structured_hover_deadline_msec and int(information.get("_hover_source_id")) != 123457:
+		await get_tree().process_frame
+	# 当前武将悬停的技能说明视图；实际组件动态创建并维护该列表。
+	var hover_skills: Array = information.get("_hover_skill_description_labels") as Array
+	_check(not hover_skills.is_empty() and (hover_skills[0] as SkillDescriptionView).use_battle_colors, "武将悬停技能未使用战斗文字色")
+	information.hide_hover_information(123457)
+	# 正式武将详情；检查普通技能正文和轮回技分段在战斗配色下均可读。
+	information.show_character_details(snapshot["players"][0], GameDatabase.get_character("gepard"))
+	await _settle()
+	# 详情中的技能说明；使用真实详情组件创建的首个条目。
+	var detail_description: SkillDescriptionView = information.get_character_skill_list().get_child(0).get_child(1) as SkillDescriptionView
+	_check(detail_description != null and detail_description.use_battle_colors, "武将详情未启用战斗文字色")
+	if detail_description != null:
+		detail_description.configure_description("轮回技，①第一节；②第二节。", true, 0)
+		# 轮回技能分段；普通前缀和非当前节分别使用战斗次级色与淡色。
+		var detail_segments: Array[Dictionary] = detail_description.get_rendered_segments()
+		_check(Color(str(detail_segments[0]["color"])).is_equal_approx(BATTLE_STYLE.get_color("text_secondary")) and Color(str(detail_segments[2]["color"])).is_equal_approx(BATTLE_STYLE.get_color("text_muted")), "武将详情轮回技正文颜色不正确")
+	await _capture("04a_character_details")
+	information.close_character_details()
 	# 局内聊天与日志；纯文本内容和滚动仍由原组件负责。
 	var chat: MatchChatPanel = main.get("match_chat_panel") as MatchChatPanel
 	chat.open_panel([{"display_name":"开拓者", "message":"准备好下一回合了吗？"}])
@@ -245,11 +273,42 @@ func _run() -> void:
 		GameSettings.set_ui_style(style_id)
 		await _settle()
 		_check((feedback.get("_accent") as Color).is_equal_approx(BattleUIStyle.get_color("accent")), "选中边光未跟随主题")
+		hover_description.refresh_ui_style()
+		_check(hover_description.get_theme_color("default_color").is_equal_approx(BATTLE_STYLE.get_color("text_secondary")), "局内说明切换主题后颜色错误: " + style_id)
+		# 局外默认说明；同一组件不应把战斗深色面板文字泄漏到纸面图鉴。
+		var gallery_description: SkillDescriptionView = SkillDescriptionView.new()
+		add_child(gallery_description)
+		gallery_description.configure_description("图鉴技能说明")
+		_check(Color(str(gallery_description.get_rendered_segments()[0]["color"])).is_equal_approx(BattleUIStyle.get_color("text_secondary")), "局外说明未使用原主题文字色: " + style_id)
+		gallery_description.queue_free()
 		_check((main.get_node("ReferenceBackdrop") as ReferenceBackdrop).table_surface_color.is_equal_approx(BattleUIStyle.get_color("battle_table_surface", BattleUIStyle.get_color("table_surface"))), "牌桌未应用独立局内配色")
 		if style_id == UIStyleRegistry.STYLE_SPACE_MONO:
 			_check(BattleUIStyle.get_color("battle_table_inner").get_luminance() < 0.3, "局内桌面过亮")
 			_check(BattleUIStyle.get_color("table_surface").get_luminance() > 0.8, "战斗换肤影响了局外纸面")
 			_check((main.get_node("%CenterTurnLabel") as Label).get_theme_color("font_color").get_luminance() > 0.7, "深色信息栏文字不清晰")
+		if style_id == UIStyleRegistry.STYLE_CLASSIC or style_id == UIStyleRegistry.STYLE_NIGHT:
+			# 经典明亮暖色与夜间深色；背景、正文必须成组变化，身份色与原画仍来自基础主题。
+			var classic: bool = style_id == UIStyleRegistry.STYLE_CLASSIC
+			_check((BATTLE_STYLE.get_color("selection_panel").get_luminance() > 0.8) == classic, "派生主题战斗表面明度错误: " + style_id)
+			_check((BATTLE_STYLE.get_color("text_secondary").get_luminance() < 0.5) == classic, "派生主题战斗文字明度错误: " + style_id)
+			_check(BattleUIStyle.get_color("identity_leader").is_equal_approx(UIStyleRegistry.get_color(UIStyleRegistry.STYLE_SPACE_MONO, "identity_leader")), "派生主题改变身份语义色")
+			_check((card.get_node("CardBody/ArtworkPlaceholder") as Label).get_theme_color("font_color").get_luminance() < 0.5, "浅色牌面占位文字不清晰: " + style_id)
+			_check((target.get_parent().get_node("Seat") as Label).get_theme_color("font_color").is_equal_approx(BATTLE_STYLE.get_color("seat_text")), "座次号未跟随主题: " + style_id)
+			information.show_character_details(snapshot["players"][0], GameDatabase.get_character("gepard"))
+			await _settle()
+			# 主题切换后新建的详情正文；实际富文本分段与面板必须使用同一战斗语义。
+			var themed_description: SkillDescriptionView = information.get_character_skill_list().get_child(0).get_child(1) as SkillDescriptionView
+			_check(Color(str(themed_description.get_rendered_segments()[0]["color"])).is_equal_approx(BATTLE_STYLE.get_color("text_secondary")), "派生主题详情正文颜色错误: " + style_id)
+			# 原始技能说明仅作测试后还原，截图继续显示正式数据库内容。
+			var original_skill_description: String = themed_description.get_plain_description()
+			# 当前轮回节也必须在浅色纸面清晰；不能沿用深底上的浅金文字。
+			themed_description.configure_description("轮回技，①第一节；②第二节。", true, 0)
+			_check((Color(str(themed_description.get_rendered_segments()[1]["color"])).get_luminance() < 0.5) == classic, "派生主题轮回技高亮不清晰: " + style_id)
+			themed_description.configure_description(original_skill_description)
+			await _settle()
+			_check(information.get_character_close_button().get_theme_color("font_focus_color").is_equal_approx(BATTLE_STYLE.get_color("text_primary")), "详情关闭按钮焦点文字不清晰: " + style_id)
+			await _capture("details_" + style_id)
+			information.close_character_details()
 		await _capture("theme_" + style_id)
 	# 重演控制条只改变显示，不开启录制或网络。
 	main.call("_ensure_replay_playback_components")

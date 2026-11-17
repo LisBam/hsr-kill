@@ -520,7 +520,8 @@ func _refresh_card_content() -> void:
 	_corner_label.add_theme_color_override("font_color", content_color)
 	_name_label.add_theme_color_override("font_color", content_color)
 	_type_label.add_theme_color_override("font_color", BattleUIStyle.get_color("card_text"))
-	_artwork_placeholder.add_theme_color_override("font_color", BattleUIStyle.get_color("text_muted"))
+	# 纸面占位文字独立于窗口次级文字，兼容深色菜单与浅色实体牌同时存在的主题。
+	_artwork_placeholder.add_theme_color_override("font_color", BattleUIStyle.get_color("card_placeholder", BattleUIStyle.get_color("text_muted")))
 
 
 ## 按当前牌面尺寸把卡牌标签行固定在插画中央；多个标签保留间距并作为整体居中。

@@ -2,6 +2,8 @@ extends Control
 
 ## 局内外壳样式；只组织面板与按钮层次，不改变规则语义色和内容尺寸。
 const BATTLE_STYLE: Script = preload("res://scripts/ui/battle_surface_style.gd")
+## 未配置座次语义色时保留场景原金色；仅用于旧主题兼容，不影响座位排序。
+const DEFAULT_SEAT_TEXT_COLOR: Color = Color("f0b52f")
 
 ## 标准身份局演示桌面。界面只提交 PlayerAction 并渲染快照，不直接修改任何对局状态。
 
@@ -2192,6 +2194,8 @@ func _render_players() -> void:
 			_identity_marks.erase(target_id)
 		player_button.set_identity_mark(_resolve_display_identity_mark(target_id))
 		player_seat_label.text = _seat_text(int(player.get("seat_number", target_id + 1)))
+		# 座次号使用独立主题语义，浅色桌面选深金，未提供专用色的旧主题保留场景原金色。
+		player_seat_label.add_theme_color_override("font_color", BATTLE_STYLE.get_color("seat_text", DEFAULT_SEAT_TEXT_COLOR))
 		if player_seat_slot.get_index() != seat_offset - 1:
 			player_grid.move_child(player_seat_slot, seat_offset - 1)
 		next_player_views[target_id] = player_button
@@ -3996,6 +4000,8 @@ func _apply_ui_style() -> void:
 		var player_view: PlayerTargetView = player_view_variant as PlayerTargetView
 		if player_view != null and is_instance_valid(player_view):
 			player_view.refresh_ui_style()
+			# 已有座位在主题切换时复用，因此与武将牌一起刷新座次号字色。
+			(player_view.get_parent().get_node("Seat") as Label).add_theme_color_override("font_color", BATTLE_STYLE.get_color("seat_text", DEFAULT_SEAT_TEXT_COLOR))
 	if local_player_card != null and is_instance_valid(local_player_card):
 		local_player_card.refresh_ui_style()
 	for skill_view_variant: Variant in _skill_views.values():

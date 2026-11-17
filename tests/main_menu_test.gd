@@ -217,7 +217,7 @@ func _run() -> void:
 	if main_menu_card_name_option == null or match_menu_card_name_option == null or main_menu_card_name_option.item_count != 2 or match_menu_card_name_option.item_count != 2 or main_menu_card_name_option.get_item_text(0) != "崩铁杀" or main_menu_card_name_option.get_item_text(1) != "三国杀":
 		_fail("card_name_option_layout")
 		return
-	if main_menu_ui_style_option == null or main_menu_ui_style_option.item_count != 3 or main_menu_ui_style_option.get_item_text(0) != "星穹 · 纸金" or main_menu_ui_style_option.get_item_text(1) != "暖木家园" or main_menu_ui_style_option.get_item_text(2) != "高级黑金" or str(main_menu_ui_style_option.get_item_metadata(2)) != UIStyleRegistry.STYLE_PREMIUM_BLACK_GOLD:
+	if main_menu_ui_style_option == null or main_menu_ui_style_option.item_count != UIStyleRegistry.STYLE_ORDER.size() or main_menu_ui_style_option.get_item_text(0) != "星穹 · 纸金" or main_menu_ui_style_option.get_item_text(1) != "暖木家园" or main_menu_ui_style_option.get_item_text(2) != "高级黑金" or str(main_menu_ui_style_option.get_item_metadata(2)) != UIStyleRegistry.STYLE_PREMIUM_BLACK_GOLD:
 		_fail("ui_style_option_layout")
 		return
 	# 主菜单名称模式选择；通过实际下拉信号写入全局设置并同步到局内同构下拉框。

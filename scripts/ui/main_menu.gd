@@ -839,7 +839,7 @@ func _select_identity_mode() -> void:
 	var identity_count: int = GameSettings.get_stored_player_count_for_mode(GameSettings.MATCH_MODE_IDENTITY) if GameSettings != null else int(_player_count_input.value)
 	set_next_player_count(identity_count)
 	_mode_title.text = "身份模式"
-	_mode_description.text = "标准身份局 · %d—%d人 · 主公忠臣 vs 反贼内奸" % [minimum_player_count, maximum_player_count]
+	_mode_description.text = "%d—%d人 · 随机身份，阵营对抗" % [minimum_player_count, maximum_player_count]
 	# 预览左上角“标准身份局”徽章已按需求隐藏；身份与斗地主均不展示该 UI。
 	if _preview_mode_badge != null:
 		_preview_mode_badge.visible = false
@@ -886,7 +886,7 @@ func _select_doudizhu_mode() -> void:
 	preferred_count = GameSettings.normalize_player_count_for_mode(GameSettings.MATCH_MODE_DOUDIZHU, preferred_count) if GameSettings != null else (3 if preferred_count < 4 else 5)
 	set_next_player_count(preferred_count)
 	_mode_title.text = "斗地主"
-	_mode_description.text = "斗地主·3或5人·地主VS农民"
+	_mode_description.text = "3或5人 · 地主对抗农民"
 	# 左侧模式卡片人数标签；场景默认与斗地主合法人数 3/5 保持一致。
 	var doudizhu_count_label: Label = %DouDizhuModePlayerCount as Label
 	if doudizhu_count_label != null:
@@ -936,7 +936,7 @@ func _select_team2v2_mode() -> void:
 	preferred_count = GameSettings.normalize_player_count_for_mode(GameSettings.MATCH_MODE_TEAM2V2, preferred_count) if GameSettings != null else 4
 	set_next_player_count(preferred_count)
 	_mode_title.text = "2v2"
-	_mode_description.text = "2v2·4人·蓝方VS红方·一/四同队、二/三同队"
+	_mode_description.text = "4人 · 两两组队，蓝红对抗"
 	# 2v2 左侧模式卡人数标签；固定显示4人并与输入限制保持一致。
 	var team2v2_count_label: Label = %Team2v2ModePlayerCount as Label
 	if team2v2_count_label != null:
@@ -981,7 +981,7 @@ func _select_wheel_duel_mode() -> void:
 	_player_count_input.step = 1.0
 	set_next_player_count(2)
 	_mode_title.text = "1v1车轮战"
-	_mode_description.text = "2人·先手红方VS后手蓝方·三将车轮对战"
+	_mode_description.text = "2人 · 三将车轮对战"
 	if _preview_mode_badge != null:
 		_preview_mode_badge.visible = false
 	_set_top_navigation_page(false)
@@ -1024,7 +1024,7 @@ func _select_opportunity_brawl_mode() -> void:
 	var preferred_count: int = GameSettings.get_stored_player_count_for_mode(GameSettings.MATCH_MODE_OPPORTUNITY_BRAWL)
 	set_next_player_count(preferred_count)
 	_mode_title.text = "机缘大乱斗"
-	_mode_description.text = "身份模式基础 · 2—10人 · 每轮全体三选一机缘"
+	_mode_description.text = "2—10人 · 每轮选择机缘，阵营对抗"
 	if _preview_mode_badge != null:
 		_preview_mode_badge.visible = false
 	_set_top_navigation_page(false)
@@ -1069,7 +1069,7 @@ func _select_conquest_mode() -> void:
 	# 过关斩将的联机玩家数由 next_match_player_count_conquest 独立保存，两者都不应被本模式改写。
 	_apply_player_count_value(GameSettings.OFFLINE_CONQUEST_ROLE_COUNT)
 	_mode_title.text = "过关斩将"
-	_mode_description.text = "单人1人·联机2至4人·清空本层全部敌方后挑战下一关"
+	_mode_description.text = "单人或联机2—4人 · 闯关迎敌"
 	if _preview_mode_badge != null:
 		_preview_mode_badge.visible = false
 	_set_top_navigation_page(false)
@@ -1111,7 +1111,7 @@ func _select_winner_takes_all_mode() -> void:
 	var stored_count: int = GameSettings.get_stored_player_count_for_mode(GameSettings.MATCH_MODE_WINNER_TAKES_ALL)
 	set_next_player_count(stored_count)
 	_mode_title.text = "胜者为王"
-	_mode_description.text = "全员内奸 · %d—%d人 · 击杀其他所有角色者获胜" % [minimum_player_count, maximum_player_count]
+	_mode_description.text = "%d—%d人 · 全员混战，生存至最后" % [minimum_player_count, maximum_player_count]
 	# 预览左上角模式徽章与身份模式一样不展示。
 	if _preview_mode_badge != null:
 		_preview_mode_badge.visible = false

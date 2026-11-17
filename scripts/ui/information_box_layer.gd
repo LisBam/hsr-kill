@@ -481,6 +481,10 @@ func refresh_ui_style() -> void:
 	_character_title_label.add_theme_color_override("font_color", BATTLE_STYLE.get_color("text_primary"))
 	_character_close_button.add_theme_color_override("font_color", BATTLE_STYLE.get_color("text_primary"))
 	_character_close_button.add_theme_color_override("font_hover_color", BATTLE_STYLE.get_color("button_hover_font"))
+	# 焦点和按压同样使用面板正文色，避免浅色主题回退引擎默认白字。
+	_character_close_button.add_theme_color_override("font_focus_color", BATTLE_STYLE.get_color("text_primary"))
+	_character_close_button.add_theme_color_override("font_pressed_color", BATTLE_STYLE.get_color("text_primary"))
+	_character_close_button.add_theme_color_override("font_hover_pressed_color", BATTLE_STYLE.get_color("text_primary"))
 	_character_close_button.add_theme_stylebox_override("normal", BATTLE_STYLE.make_button(BATTLE_STYLE.get_color("metal_panel"), BATTLE_STYLE.get_color("border"), 1, 4))
 	_character_close_button.add_theme_stylebox_override("hover", BATTLE_STYLE.make_button(BATTLE_STYLE.get_color("action_button"), BATTLE_STYLE.get_color("accent"), 1, 4))
 	_character_close_button.add_theme_stylebox_override("pressed", BATTLE_STYLE.make_button(BATTLE_STYLE.get_color("action_button").darkened(0.12), BATTLE_STYLE.get_color("accent"), 1, 4))
@@ -628,6 +632,7 @@ func _build_hover_panel() -> void:
 	_hover_description_container.add_theme_constant_override("separation", 9)
 	hover_content.add_child(_hover_description_container)
 	_hover_description_label = SkillDescriptionView.new()
+	_hover_description_label.use_battle_colors = true
 	_hover_description_label.name = "Description"
 	_hover_description_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_hover_description_label.add_theme_font_size_override("normal_font_size", 14)
@@ -894,6 +899,7 @@ func _render_hover_description() -> void:
 		_hover_skill_name_labels.append(section_title_label)
 		# 当前技能描述标签；完整规则文本自然换行，颜色保持与右键详情说明一致。
 		var section_description_label: SkillDescriptionView = SkillDescriptionView.new()
+		section_description_label.use_battle_colors = true
 		section_description_label.name = "Description"
 		section_description_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		section_description_label.configure_description(str(section.get("description", "暂无说明。")), bool(section.get("reincarnation", false)), int(section.get("reincarnation_section_index", 0)))
@@ -1009,6 +1015,7 @@ func _render_character_skills() -> void:
 		skill_entry.add_child(skill_name_label)
 		# 技能描述行；长文本允许自然换行，滚动框负责查看超出面板高度的全部内容。
 		var skill_description_label: SkillDescriptionView = SkillDescriptionView.new()
+		skill_description_label.use_battle_colors = true
 		skill_description_label.configure_description(skill_description, bool(skill_entry_data.get("reincarnation", false)), int(skill_entry_data.get("reincarnation_section_index", 0)))
 		skill_description_label.add_theme_font_size_override("normal_font_size", 14)
 		skill_entry.add_child(skill_description_label)

@@ -3,6 +3,12 @@ extends RichTextLabel
 
 ## 可复用技能说明视图。轮回技按①②等轮回节切分，当前节使用强调色，其他节使用淡色，公共正文保持普通颜色。
 
+## 战斗界面配色适配器；只在说明视图被局内信息层使用时读取战斗专用语义。
+const BATTLE_STYLE: Script = preload("res://scripts/ui/battle_surface_style.gd")
+
+## 是否使用战斗界面配色；默认false适用于局外图鉴，局内信息层创建前设为true，运行时通常无需修改。
+@export var use_battle_colors: bool = false
+
 ## 可识别的轮回节序号；数组索引与轮回状态中的零基section_index完全一致。
 const SECTION_SYMBOLS: Array[String] = ["①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨", "⑩"]
 
@@ -154,8 +160,13 @@ func get_strike_thickness() -> float:
 
 ## 按当前活动主题重绘全部分段颜色；技能文本和轮回状态保持不变。
 func refresh_ui_style() -> void:
-	add_theme_color_override("default_color", BattleUIStyle.get_color("text_secondary"))
+	add_theme_color_override("default_color", _get_description_color("text_secondary"))
 	_render_description()
+
+
+## 按所属界面读取文字语义色；局外使用纸面文字，局内使用深色面板的战斗文字。
+func _get_description_color(key: String) -> Color:
+	return BATTLE_STYLE.get_color(key) if use_battle_colors else BattleUIStyle.get_color(key)
 
 
 ## 解析轮回节边界并以主题颜色重新构建富文本；公共前后缀始终使用普通次级文字色。
@@ -171,7 +182,7 @@ func _render_description() -> void:
 	if _source_description.is_empty():
 		return
 	# 普通正文颜色；轮回技标签、触发条件、X说明和跨轮回节持续效果均使用该颜色。
-	var normal_color: Color = BattleUIStyle.get_color("text_secondary")
+	var normal_color: Color = _get_description_color("text_secondary")
 	if not _is_reincarnation:
 		_append_colored_segment(_source_description, normal_color, -1, false)
 		call_deferred("_refresh_strike_segments")
@@ -202,7 +213,7 @@ func _render_description() -> void:
 		# 当前轮回节是否为权威状态指定的高亮节；只有该段使用主题强调色。
 		var is_current: bool = visible_section_index == clampi(_current_section_index, 0, section_positions.size() - 1)
 		# 当前轮回节字体颜色；非当前节统一淡化，当前节使用高亮色。
-		var section_color: Color = BattleUIStyle.get_color("accent") if is_current else BattleUIStyle.get_color("text_muted")
+		var section_color: Color = _get_description_color("accent") if is_current else _get_description_color("text_muted")
 		_append_colored_segment(_source_description.substr(section_start, section_end - section_start), section_color, visible_section_index, is_current)
 		rendered_cursor = section_end
 	if rendered_cursor < _source_description.length():

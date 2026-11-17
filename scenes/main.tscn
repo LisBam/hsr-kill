@@ -1312,7 +1312,7 @@ unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 40)
 layout_mode = 2
 theme_override_font_sizes/font_size = 22
-text = "选择你的战局     /     GAME MODES"
+text = "模式选择"
 vertical_alignment = 1
 
 [node name="MainMenuModeScroll" type="ScrollContainer" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuModeList/ModeListVBox" unique_id=1466164604]
@@ -1740,6 +1740,7 @@ grow_horizontal = 0
 [node name="ModeSummaryVBox" type="VBoxContainer" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuPreviewPanel/MainMenuPreviewContent/MainMenuModeSummaryPanel" unique_id=1102338951]
 layout_mode = 2
 theme_override_constants/separation = 2
+alignment = 1
 
 [node name="MainMenuModeEyebrow" type="Label" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuPreviewPanel/MainMenuPreviewContent/MainMenuModeSummaryPanel/ModeSummaryVBox" unique_id=1835466942]
 unique_name_in_owner = true
@@ -1766,9 +1767,11 @@ theme_override_constants/outline_size = 0
 theme_override_font_sizes/font_size = 15
 text = "标准身份局 · 2—10人"
 horizontal_alignment = 0
+text_overrun_behavior = 3
 
 [node name="MainMenuModeRuleHint" type="Label" parent="MainMenu/MainMenuFrame/MainMenuContent/MainMenuPreviewPanel/MainMenuPreviewContent/MainMenuModeSummaryPanel/ModeSummaryVBox" unique_id=1046112279]
 unique_name_in_owner = true
+visible = false
 layout_mode = 2
 theme_override_font_sizes/font_size = 13
 text = "随机身份 · 阵营对抗"
