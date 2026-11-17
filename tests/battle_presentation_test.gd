@@ -294,7 +294,7 @@ func _run() -> void:
 			var classic: bool = style_id == UIStyleRegistry.STYLE_CLASSIC
 			_check(BATTLE_STYLE.get_color("selection_panel").get_luminance() < 0.3, "派生主题战斗表面明度错误: " + style_id)
 			if classic:
-				_check(BATTLE_STYLE.get_color("table_surface").is_equal_approx(Color("24262b")) and BATTLE_STYLE.get_color("table_inner").is_equal_approx(Color("30333a")), "经典战斗偏离历史桌面配色")
+				_check(BATTLE_STYLE.get_color("table_surface").is_equal_approx(Color("282725")) and BATTLE_STYLE.get_color("table_inner").is_equal_approx(Color("34322e")), "经典战斗未应用统一暖色桌面")
 			_check(BATTLE_STYLE.get_color("text_secondary").get_luminance() > 0.6, "派生主题战斗文字明度错误: " + style_id)
 			_check(BattleUIStyle.get_color("identity_leader").is_equal_approx(UIStyleRegistry.get_color(UIStyleRegistry.STYLE_SPACE_MONO, "identity_leader")), "派生主题改变身份语义色")
 			_check((card.get_node("CardBody/ArtworkPlaceholder") as Label).get_theme_color("font_color").is_equal_approx(BattleUIStyle.get_color("card_placeholder")), "牌面占位文字未使用主题颜色: " + style_id)

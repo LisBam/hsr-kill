@@ -9,19 +9,20 @@ const BATTLE_STYLE: Script = preload("res://scripts/ui/battle_surface_style.gd")
 ## 入场和布局等待秒数；0.35秒覆盖当前最长过渡及两次容器排序。
 const SETTLE_SECONDS: float = 0.35
 ## ffddb75a提交前a61e4959的固定颜色样本；防止后续调色偏离指定参考。
+## 当前样本保留历史深色明度，并按主菜单炭黑/香槟金语义进行小幅同色系统一。
 const EXPECTED_COLORS: Dictionary = {
-	"outer_background": Color("111214"),
-	"table_surface": Color("24262b"),
-	"table_inner": Color("30333a"),
-	"rail": Color("1d1d1d"),
-	"panel": Color("242321f2"),
-	"metal_panel": Color("171717f7"),
-	"border": Color("bfa86c"),
-	"accent": Color("d4b55f"),
-	"action_button": Color("403b32"),
-	"text_primary": Color("f4f1e8"),
-	"text_secondary": Color("d0c8b8"),
-	"selection_panel": Color("211f1cf2"),
+	"outer_background": Color("252525"),
+	"table_surface": Color("282725"),
+	"table_inner": Color("34322e"),
+	"rail": Color("282725"),
+	"panel": Color("282725f2"),
+	"metal_panel": Color("242321f7"),
+	"border": Color("b9a47d"),
+	"accent": Color("d5b67a"),
+	"action_button": Color("3e372c"),
+	"text_primary": Color("f7f1e5"),
+	"text_secondary": Color("cfc5b3"),
+	"selection_panel": Color("282725f2"),
 	"equipment_background": Color("eeeae2"),
 	"equipment_text": Color("292621"),
 	"card_paper": Color("f4f1e9"),
@@ -70,8 +71,10 @@ func _run() -> void:
 	get_viewport().gui_disable_input = true
 	await GameDatabase.wait_until_ready()
 	GameSettings.set_ui_style(UIStyleRegistry.STYLE_CLASSIC)
+	if not _check(BATTLE_STYLE.get_color("accent").is_equal_approx(UIStyleRegistry.get_color(UIStyleRegistry.STYLE_SPACE_MONO, "accent")) and BATTLE_STYLE.get_color("border").is_equal_approx(UIStyleRegistry.get_color(UIStyleRegistry.STYLE_SPACE_MONO, "border")) and BATTLE_STYLE.get_color("text_primary").is_equal_approx(UIStyleRegistry.get_color(UIStyleRegistry.STYLE_SPACE_MONO, "on_dark")), "战斗金色和正文未与主菜单深色表面统一"):
+		return
 	for key: String in EXPECTED_COLORS:
-		if not _check(BATTLE_STYLE.get_color(key).is_equal_approx(EXPECTED_COLORS[key]), "历史语义不一致: " + key):
+		if not _check(BATTLE_STYLE.get_color(key).is_equal_approx(EXPECTED_COLORS[key]), "经典战斗语义不一致: " + key):
 			return
 	# 正式场景实例；禁止控制器自动创建随机对局。
 	var main: Control = MAIN_SCENE.instantiate() as Control
