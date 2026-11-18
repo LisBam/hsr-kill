@@ -4,6 +4,9 @@ extends Control
 ## 可取消的面板入场；只订阅显隐，不延迟关闭、提交或权威状态更新。
 const SURFACE_MOTION: Script = preload("res://scripts/ui/ui_surface_motion.gd")
 
+## 可复用标题栏拖动组件；位置记忆只属于当前窗口，不参与规则请求或持久化设置。
+const WINDOW_DRAG: Script = preload("res://scripts/ui/ui_window_drag.gd")
+
 ## 局内外壳样式；只组织面板与按钮层次，不改变规则语义色和内容尺寸。
 const BATTLE_STYLE: Script = preload("res://scripts/ui/battle_surface_style.gd")
 
@@ -108,6 +111,9 @@ var _frame: PanelContainer
 ## 请求标题标签；显示“响应询问”“弃牌阶段”等永久规则语义。
 var _title_label: Label
 
+## 当前选择框的拖动组件；所有卡牌选择、公共牌池和只读查看共用，关闭后重置位移。
+var _window_drag: WINDOW_DRAG
+
 ## 请求说明富文本标签；显示本次所需选择数量与操作目的，并可独立强调公开目标武将名。
 var _prompt_label: RichTextLabel
 
@@ -149,6 +155,7 @@ var _public_layout_signature: int = 0
 var _public_request_id: int = -1
 
 ## 由桌面传入的底部响应区高度；默认0表示独立使用，公共窗口布局不得进入该区域。
+## 该预留仅约束默认排布；玩家拖动时使用整个屏幕范围。
 var _public_response_reserved_height: float = 0.0
 
 ## 牌堆排序请求中的牌堆顶行UID；数组顺序对应界面从左到右，也对应更早到更晚的摸牌顺序。
@@ -192,6 +199,9 @@ func _ready() -> void:
 	_title_label.add_theme_color_override("font_color", BATTLE_STYLE.get_color("text_primary"))
 	_title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	content.add_child(_title_label)
+	_window_drag = WINDOW_DRAG.new()
+	_frame.add_child(_window_drag)
+	_window_drag.configure(_frame, _title_label)
 	_prompt_label = RichTextLabel.new()
 	_prompt_label.bbcode_enabled = true
 	_prompt_label.scroll_active = false
@@ -262,6 +272,8 @@ func refresh_ui_style() -> void:
 
 ## 显示一条规则层选择请求；重复调用会完整替换旧候选和本地临时选择。
 func show_request(choice_request: Dictionary) -> void:
+	if not visible or not _public_display.is_empty() or int(choice_request.get("request_id", -1)) != int(_choice_request.get("request_id", -1)):
+		_window_drag.reset()
 	_shade.visible = true
 	_choice_request = choice_request.duplicate(true)
 	_public_display.clear()
@@ -376,6 +388,8 @@ func _restore_standard_zone_scroll_behavior() -> void:
 
 ## 显示一份跨多名玩家持续存在的公共选牌快照；只有传入有效本地请求时开放牌面与确认按钮。
 func show_public_display(display_data: Dictionary, choice_request: Dictionary = {}, reserved_bottom_height: float = 0.0) -> void:
+	if not visible or _public_display.is_empty():
+		_window_drag.reset()
 	_public_response_reserved_height = maxf(reserved_bottom_height, 0.0)
 	# 公共牌池与手牌响应并存，不使用全屏遮罩压暗或截获下方询问、按钮与手牌。
 	_shade.visible = false
@@ -442,11 +456,13 @@ func _refresh_public_display_layout() -> void:
 	var available_height: float = maxf(size.y - _public_response_reserved_height - public_response_gap * 2.0, 1.0)
 	# 最终窗口尺寸；超出的牌阵保留在滚动容器内。
 	var frame_size: Vector2 = Vector2(maxf(PUBLIC_PANEL_MIN_WIDTH, public_cards_width + PUBLIC_PANEL_HORIZONTAL_PADDING), minf(minf(public_panel_max_height, available_height), public_cards_height + PUBLIC_PANEL_CHROME_HEIGHT))
-	_set_frame_size(frame_size)
+	_set_frame_size(frame_size, false)
 	_frame.anchor_top = 0.0
 	_frame.anchor_bottom = 0.0
 	_frame.offset_top = public_response_gap + (available_height - frame_size.y) * 0.5
 	_frame.offset_bottom = _frame.offset_top + frame_size.y
+	# 上方预留区只决定默认位置；手动拖动可使用整个屏幕，不受默认排布区域限制。
+	_window_drag.apply_layout()
 
 
 ## 计算公共牌阵的稳定结构签名；只有固定牌位或原始牌面变化时才允许重建正式 CardView 节点。
@@ -513,6 +529,8 @@ func _refresh_public_action_row() -> void:
 ## 因此打开与关闭都不会产生任何规则动作，权威状态在前后完全一致。
 ## 记录的是牌名而不是实体牌，所以每张牌面都隐藏花色与点数，只显示牌名、类别与规则说明。
 func show_recorded_names(view_data: Dictionary) -> void:
+	if not visible or not _choice_request.is_empty() or not _public_display.is_empty():
+		_window_drag.reset()
 	_shade.visible = true
 	_choice_request.clear()
 	_public_display.clear()
@@ -571,6 +589,7 @@ func show_recorded_names(view_data: Dictionary) -> void:
 
 ## 关闭并清理当前选择请求；规则层提交成功或重新开局时调用。
 func close() -> void:
+	_window_drag.reset()
 	information_dismissed.emit()
 	visible = false
 	_choice_request.clear()
@@ -1032,7 +1051,7 @@ func _on_cancel_pressed() -> void:
 
 
 ## 调整居中选择框尺寸并同步左上位置；普通请求与公共展示共用同一节点，不重建遮罩或按钮。
-func _set_frame_size(frame_size: Vector2) -> void:
+func _set_frame_size(frame_size: Vector2, restore_drag: bool = true) -> void:
 	if _frame == null:
 		return
 	# 居中锚点与四边偏移同时写入，避免动态改尺寸后沿用左上角局部坐标而移出视口。
@@ -1044,6 +1063,8 @@ func _set_frame_size(frame_size: Vector2) -> void:
 	_frame.offset_top = -frame_size.y * 0.5
 	_frame.offset_right = frame_size.x * 0.5
 	_frame.offset_bottom = frame_size.y * 0.5
+	if restore_drag and _window_drag != null:
+		_window_drag.apply_layout()
 
 
 ## 删除动态区域节点；重建请求时防止旧牌面和信号继续留在树中。

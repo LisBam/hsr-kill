@@ -101,6 +101,9 @@ const END_PLAY_BUTTON_MINIMUM_SIZE: Vector2 = Vector2(112.0, 36.0)
 ## 回合结束按钮相对主场景右下锚点的固定矩形；位置位于取消按钮右侧、技能栏上方且不遮挡中央操作。
 const END_PLAY_BUTTON_OFFSETS: Rect2 = Rect2(-310.0, -218.0, 112.0, 36.0)
 
+## 公共牌池可自由移动时的响应层级；高于窗口及其悬停牌面，保证询问与按钮始终可见、可点击。
+const PUBLIC_RESPONSE_Z_INDEX: int = CardSelectionPanel.MODAL_Z_INDEX + CardView.HOVER_Z_INDEX + 1
+
 ## 回合结束按钮的危险操作背景色；朱红色与普通暖金确认按钮区分，运行时无需修改。
 const END_PLAY_BUTTON_COLOR: Color = Color("8f302d")
 
@@ -4436,6 +4439,9 @@ func _on_control_choice_submitted(request_id: int, control_id: String) -> void:
 ## 根据公共展示与本地独立请求统一决定选择窗口内容；公共展示始终优先保持可见。
 func _refresh_card_selection_panel() -> void:
 	_refresh_hand_layer_for_public_display()
+	# 普通模态维持原层级；只有公共牌池并存时才把响应控件提到窗口上方。
+	interaction_panel.z_index = 0
+	end_play_button.z_index = 0
 	# 银狼专属窗口接管期间通用选择面板必须完全关闭：它的候选列表为空，
 	# 若同时显示会形成两个窗口争夺同一次提交，玩家点哪个都可能被权威端按另一条请求拒绝。
 	if not _yinlang_window_request.is_empty():
@@ -4463,6 +4469,8 @@ func _refresh_card_selection_panel() -> void:
 		# 操作区顶边以下留给询问、确认/取消与手牌；组件只接收高度，不依赖桌面的节点路径。
 		var reserved_bottom_height: float = maxf(size.y - interaction_panel.position.y, size.y - hand_panel.position.y)
 		card_selection_panel.show_public_display(enriched_display, interactive_request, reserved_bottom_height)
+		interaction_panel.z_index = PUBLIC_RESPONSE_Z_INDEX
+		end_play_button.z_index = PUBLIC_RESPONSE_Z_INDEX
 		return
 	if not _modal_card_choice_request.is_empty():
 		card_selection_panel.show_request(_enrich_target_zone_card_choice_request(_modal_card_choice_request))

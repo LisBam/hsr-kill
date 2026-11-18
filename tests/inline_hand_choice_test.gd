@@ -607,8 +607,37 @@ func _run() -> void:
 	if int(main_instance.get("_suppressed_group_trick_uid")) != 9901 or not end_play_button.is_visible_in_tree() or int((selection_panel.get("_choice_request") as Dictionary).get("request_id", -1)) != 15 or (selection_panel.get("_selected_card_uids") as Array[int]) != [7004]:
 		_fail("harvest_choice_toggle_blocked_or_submitted")
 		return
+	# 标题栏拖动只移动公共窗口；刷新同一牌池后保留位置和已选牌。
+	var public_position_before_drag: Vector2 = selection_frame.position
+	await _drag_window(selection_panel.get("_title_label") as Control, Vector2(64.0, -16.0))
+	# 拖动后的本地位置；该位移不属于权威快照，重复广播不得覆盖。
+	var public_position_after_drag: Vector2 = selection_frame.position
+	main_instance.call("_refresh_card_selection_panel")
+	if not selection_frame.position.is_equal_approx(public_position_before_drag + Vector2(64.0, -16.0)) or not selection_frame.position.is_equal_approx(public_position_after_drag) or (selection_panel.get("_selected_card_uids") as Array[int]) != [7004]:
+		_fail("harvest_drag_position_or_selection_lost before=%s after=%s refreshed=%s" % [public_position_before_drag, public_position_after_drag, selection_frame.position])
+		return
+	# 四个方向均可自由移动；默认询问区上方的位置不是拖动边界。
+	for drag_delta: Vector2 in [Vector2(0.0, 40.0), Vector2(0.0, -40.0), Vector2(-40.0, 0.0), Vector2(40.0, 0.0)]:
+		# 本次移动前的位置；验证每个方向的实际位移而不是只检查窗口仍可见。
+		var before_direction_drag: Vector2 = selection_frame.position
+		await _drag_window(selection_panel.get("_title_label") as Control, drag_delta)
+		if not selection_frame.position.is_equal_approx(before_direction_drag + drag_delta):
+			_fail("harvest_direction_drag_restricted:%s" % drag_delta)
+			return
+	await _drag_window(selection_panel.get("_title_label") as Control, Vector2(10000.0, 10000.0))
+	if not Rect2(Vector2.ZERO, selection_panel.size).encloses(selection_frame.get_rect()) or selection_frame.position.y <= (main_instance.get_node("InteractionPanel") as Control).position.y:
+		_fail("harvest_full_screen_drag_restricted")
+		return
+	# 窗口移到响应按钮位置也不能挡住“不响应”开关，点击仍不影响已选牌。
+	await _click_control(end_play_button)
+	await _click_control(end_play_button)
+	if int(main_instance.get("_suppressed_group_trick_uid")) != 9901 or (selection_panel.get("_selected_card_uids") as Array[int]) != [7004]:
+		_fail("harvest_moved_window_blocks_response")
+		return
 	await _capture_harvest("choice")
 	main_instance.set("_suppressed_group_trick_uid", -1)
+	# 默认排布检查不继承前面的手动拖动位置。
+	(selection_panel.get("_window_drag") as Node).call("reset")
 	# 十张公共牌覆盖三行以及紧凑窗口；窗口必须始终避开下方响应区，超高内容使用滚动区。
 	var large_display: Dictionary = harvest_public_display.duplicate(true)
 	for slot_index: int in range(3, 10):
@@ -632,6 +661,30 @@ func _run() -> void:
 			return
 		await _capture_harvest("large_%d" % int(viewport_size.x))
 	main_instance.size = original_size
+	await get_tree().process_frame
+	# 普通卡牌选择和记录牌名查看共用同一拖动组件，模态遮罩仍需保持可见。
+	selection_panel.show_request(harvest_request)
+	await get_tree().process_frame
+	# 普通窗口初始位置；标题拖动不能被下一次同请求刷新覆盖。
+	var normal_position_before_drag: Vector2 = selection_frame.position
+	await _drag_window(selection_panel.get("_title_label") as Control, Vector2(-90.0, 25.0))
+	selection_panel.show_request(harvest_request)
+	if not selection_frame.position.is_equal_approx(normal_position_before_drag + Vector2(-90.0, 25.0)) or not selection_shade.visible:
+		_fail("normal_selection_drag_not_preserved")
+		return
+	selection_panel.show_recorded_names({"title":"记录的牌名", "card_names":[]})
+	await get_tree().process_frame
+	# 只读窗口初始位置；查看入口不创建规则请求，移动也不能触发选牌动作。
+	var recorded_position_before_drag: Vector2 = selection_frame.position
+	await _drag_window(selection_panel.get("_title_label") as Control, Vector2(-40.0, -30.0))
+	if not selection_frame.position.is_equal_approx(recorded_position_before_drag + Vector2(-40.0, -30.0)):
+		_fail("recorded_names_drag_failed")
+		return
+	selection_panel.close()
+	selection_panel.show_recorded_names({"title":"记录的牌名", "card_names":[]})
+	if not selection_frame.position.is_equal_approx(recorded_position_before_drag):
+		_fail("window_drag_not_reset_after_close")
+		return
 	# 本地普通出牌快照；权威 chooseToUse 只列出【杀】，响应专用【闪】即使轮到本人也必须保持禁用灰显。
 	var play_snapshot: Dictionary = _make_snapshot([slash_data, dodge_data], 16)
 	play_snapshot["current_player_id"] = 0
@@ -893,3 +946,31 @@ func _capture_harvest(file_name: String) -> void:
 	await RenderingServer.frame_post_draw
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path("res://.godot/harvest_review"))
 	get_viewport().get_texture().get_image().save_png("res://.godot/harvest_review/%s.png" % file_name)
+
+
+## 从标题栏发出真实左键拖动；拖出窗口后仍由组件跟踪并在释放时停止，不直接修改窗口坐标。
+func _drag_window(handle: Control, delta: Vector2) -> void:
+	# 标题栏中心的视口坐标；转换确保画布拉伸后仍命中标题。
+	var point: Vector2 = handle.get_global_transform_with_canvas() * (handle.size * 0.5)
+	# 起拖前的鼠标移动事件；更新正式GUI命中对象。
+	var motion: InputEventMouseMotion = InputEventMouseMotion.new()
+	motion.position = point
+	get_viewport().push_input(motion, true)
+	# 左键按下事件；只有标题栏应接管此输入。
+	var press: InputEventMouseButton = InputEventMouseButton.new()
+	press.position = point
+	press.button_index = MOUSE_BUTTON_LEFT
+	press.pressed = true
+	get_viewport().push_input(press, true)
+	# 保持按下的移动事件；目标可以超出视口，用于验证边界限制。
+	var drag: InputEventMouseMotion = InputEventMouseMotion.new()
+	drag.position = point + handle.get_global_transform_with_canvas().basis_xform(delta)
+	drag.button_mask = MOUSE_BUTTON_MASK_LEFT
+	get_viewport().push_input(drag, true)
+	# 标题栏外释放左键；全局输入回调必须停止拖动。
+	var release: InputEventMouseButton = InputEventMouseButton.new()
+	release.position = drag.position
+	release.button_index = MOUSE_BUTTON_LEFT
+	get_viewport().push_input(release, true)
+	await get_tree().process_frame
+	await get_tree().process_frame
