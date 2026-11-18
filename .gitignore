@@ -19,10 +19,52 @@ addons/*
 # docs/战斗框架回归说明.md，需要证据时按该文档的重现命令在本机重新生成日志。
 /.godot_test_logs/
 
-# Trellis 任务实例目录：单个任务的规划中间稿（prd/design/implement/task.json）只在本地保留，
-# 不进入版本库。武将、机制等内容的最终成果统一沉淀到 docs/ 永久文档，
-# 避免同一件事在仓库里出现第二份说法。
-# 下面两行放行早前已被跟踪的内容，保留其历史；新增任务一律不跟踪。
-/.trellis/tasks/*
-!/.trellis/tasks/archive/
-!/.trellis/tasks/09-24-audio-system/
+# 本地开发工具与协作资料：包含 AI 配置、技能、任务归档、工作日志和 IDE 设置，
+# 保留在开发者电脑上；对外使用的游戏机制、接口与运行说明统一维护在 docs/ 和 README.md。
+/.trellis/
+/.agents/
+/.claude/
+/.codex/
+/.dsh/
+/.idea/
+/AGENTS.md
+/CLAUDE.md
+/项目专属AGENTS.md
+
+# 自用设计、参考快照与临时记录不属于公开工程内容；禁止读取的文件仍只按路径排除。
+/设计自用文档（AI禁改禁读）.md
+/优秀机制关键词（AI禁读禁改）/
+/无名杀参考代码/
+/三国杀规则集/
+/参考图/
+/临时文档.md
+/_test_out.txt
+
+# Godot 本机测试用户目录、脚本缓存与可再生输出；资源旁的 .uid、.import 文件仍正常跟踪。
+/.godot-user/
+/.godot_test_user*/
+__pycache__/
+*.pyc
+*.log
+*.tmp
+*.bak
+/build/
+/builds/
+/dist/
+/exports/
+
+# 环境变量与签名凭据只在本地配置；共享模板必须使用不含真实秘密的示例值。
+.env
+.env.*
+!.env.example
+!.env.template
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+export_credentials.cfg
+
+# 本地仓库备份和历史清理副本可能保留旧个人信息，绝不能重新上传。
+/.repo-privacy-backup/
