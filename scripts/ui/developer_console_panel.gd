@@ -216,12 +216,13 @@ func _ready() -> void:
 
 
 ## 注入目标候选；保留当前选择，仅当原目标已不在新列表中时才回退到 preferred_player_id。
+## 保留选择仅限窗口打开期间；关闭期间使用当前操控角色，保证下次打开不会沿用旧目标。
 func set_target_candidates(candidates: Array[Dictionary], preferred_player_id: int) -> void:
 	_target_candidates = candidates.duplicate(true)
 	if _target_option == null:
 		return
 	# 期望选中的目标座次；先沿用当前选择，失效时才回退，避免每次快照刷新都把玩家选择重置。
-	var desired_player_id: int = _selected_target_id
+	var desired_player_id: int = _selected_target_id if visible else preferred_player_id
 	# 新列表中的全部座次；用于判断当前选择是否仍然有效。
 	var available_ids: Array[int] = []
 	for candidate: Dictionary in _target_candidates:

@@ -524,10 +524,14 @@ func _test_panel_amount_resolution() -> bool:
 
 ## 验证目标选择：默认本机、刷新保留选择、目标失效回退、空列表收敛为未选择。
 func _test_panel_target_selection() -> bool:
+	_panel.close_console()
 	# 初始注入：默认选中本机玩家（座次 0）。
-	_panel.set_target_candidates(_make_target_candidates([0, 1]), 0)
+	# 候选顺序与默认目标无关；本人排在第二项也必须默认选中本人。
+	_panel.set_target_candidates(_make_target_candidates([1, 0]), 0)
 	if _panel._selected_target_id != 0:
 		return _fail("panel_default_target=%d" % _panel._selected_target_id)
+	_panel.open_console()
+	_panel.set_target_candidates(_make_target_candidates([0, 1]), 0)
 	# 切换到座次 1；随后的快照刷新必须保留该选择，而不是每次都重置回默认目标。
 	_panel._on_target_selected(1)
 	if _panel._selected_target_id != 1:
@@ -535,6 +539,18 @@ func _test_panel_target_selection() -> bool:
 	_panel.set_target_candidates(_make_target_candidates([0, 1]), 0)
 	if _panel._selected_target_id != 1:
 		return _fail("panel_selection_not_preserved=%d" % _panel._selected_target_id)
+	# 再次打开回到当前操控角色，不继承上一次窗口内手动选中的其他目标。
+	_panel.close_console()
+	_panel.set_target_candidates(_make_target_candidates([0, 1]), 0)
+	_panel.open_console()
+	if _panel._selected_target_id != 0:
+		return _fail("panel_reopen_default_target=%d" % _panel._selected_target_id)
+	# 控制所有角色或操控技能切换视角后，首选ID随当前操控角色变化，不固定为0号玩家。
+	_panel.close_console()
+	_panel.set_target_candidates(_make_target_candidates([0, 1]), 1)
+	_panel.open_console()
+	if _panel._selected_target_id != 1:
+		return _fail("panel_controlled_target=%d" % _panel._selected_target_id)
 	# 目标离场：原选择失效时必须回退到首选目标，而不是保留一个不可用的座次。
 	_panel.set_target_candidates(_make_target_candidates([0, 2]), 2)
 	if _panel._selected_target_id != 2:

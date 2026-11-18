@@ -130,6 +130,15 @@ func _run() -> void:
 	await _capture("01a_character_selection")
 	character_selection.bind_snapshot({"phase":"others_selecting", "can_select":true, "local_candidates":["gepard", "march_7th", "natasha", "dan_heng", "xiluwa", "sangbo", "xing", "qiong"], "leader_character_id":"xiluwa", "local_identity":"rebel", "local_seat_number":2, "initial_identity":"rebel", "initial_seat_number":2, "allow_custom_assignment":true, "allow_all_characters":true, "player_count":8, "seat_options":[1,2,3,4,5,6,7,8], "identity_options":["leader","loyalist","rebel","renegade"]})
 	await _settle()
+	# 动态座次按钮；原生持续选中态必须与标题显示的座次一致，不能只依赖鼠标悬停。
+	var seat_buttons: Dictionary = character_selection.get("_seat_button_views") as Dictionary
+	_check((seat_buttons[2] as Button).button_pressed and not (seat_buttons[1] as Button).button_pressed, "当前座次没有持续高亮")
+	_check(not ((seat_buttons[2] as Button).get_theme_stylebox("pressed") as StyleBoxFlat).bg_color.is_equal_approx(((seat_buttons[1] as Button).get_theme_stylebox("normal") as StyleBoxFlat).bg_color), "已选座次底色与未选座次相同")
+	(seat_buttons[1] as Button).pressed.emit()
+	_check((seat_buttons[1] as Button).button_pressed and not (seat_buttons[2] as Button).button_pressed, "切换座次后高亮没有同步")
+	(seat_buttons[2] as Button).pressed.emit()
+	character_selection.refresh_ui_style()
+	_check((seat_buttons[2] as Button).button_pressed and not (seat_buttons[1] as Button).button_pressed, "主题刷新丢失当前座次高亮")
 	for button: Button in character_selection.find_children("*", "Button", true, false):
 		for state_name: String in ["normal", "hover", "pressed", "disabled"]:
 			# 读取真实按钮绘制状态；禁用态同样不得回退浅色共享材质。

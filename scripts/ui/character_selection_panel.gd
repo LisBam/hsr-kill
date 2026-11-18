@@ -319,7 +319,7 @@ func refresh_ui_style() -> void:
 		# 当前座次按钮；选中项使用强调边框，禁用项继续保留低对比度主题。
 		var seat_button: Button = seat_button_variant as Button
 		if seat_button != null:
-			_apply_assignment_button_style(seat_button, BATTLE_STYLE.get_color("accent"), int(seat_button.get_meta("seat_number", -1)) == _selected_seat_number)
+			_apply_assignment_button_style(seat_button, BATTLE_STYLE.get_color("accent"), int(seat_button.get_meta("seat_number", -1)) == _get_displayed_seat_number())
 	for identity_variant: Variant in _identity_button_views.keys():
 		# 当前身份按钮；边框使用身份语义色，使选择结果与局内身份徽记一致。
 		var identity: String = str(identity_variant)
@@ -864,6 +864,8 @@ func _render_custom_assignment_controls() -> void:
 		var seat_button: Button = Button.new()
 		seat_button.custom_minimum_size = Vector2(58.0, 34.0)
 		seat_button.text = "%d号位" % seat_number
+		# 座次是持续的单选状态，不依赖鼠标是否仍按住或停留在按钮上。
+		seat_button.toggle_mode = true
 		seat_button.disabled = not available_seats.has(seat_number)
 		seat_button.set_meta("seat_number", seat_number)
 		seat_button.pressed.connect(_select_seat.bind(seat_number))
@@ -1309,7 +1311,7 @@ func _update_custom_button_states() -> void:
 		# 当前座次按钮；选中项使用强调状态。
 		var seat_number: int = int(seat_number_variant)
 		var seat_button: Button = _seat_button_views[seat_number] as Button
-		_apply_assignment_button_style(seat_button, BATTLE_STYLE.get_color("accent"), seat_number == _selected_seat_number)
+		_apply_assignment_button_style(seat_button, BATTLE_STYLE.get_color("accent"), seat_number == _get_displayed_seat_number())
 	for identity_variant: Variant in _identity_button_views.keys():
 		# 当前身份按钮；使用对应身份语义色作为边框。
 		var identity: String = str(identity_variant)
@@ -1321,15 +1323,22 @@ func _update_custom_button_states() -> void:
 func _apply_assignment_button_style(button: Button, border_color: Color, selected: bool) -> void:
 	# 选中背景色；从主题操作底色向语义边框色混合，保持文字可读且在两套主题中都有明显变化。
 	var background_color: Color = BATTLE_STYLE.get_color("action_button").lerp(border_color, 0.34) if selected else BATTLE_STYLE.get_color("action_button")
+	if button.has_meta("seat_number"):
+		button.set_pressed_no_signal(selected)
+		# 当前座次使用完整主题强调色，避免暗金主按钮样式覆盖选中反馈。
+		if selected:
+			background_color = border_color
 	BATTLE_STYLE.apply_interaction_button(button, background_color, border_color, selected)
 	if selected:
 		# 已选按钮的底色承载座次或身份语义；各态文字固定白色，悬停按下也不能回退到同色字体。
-		button.add_theme_color_override("font_color", SELECTED_ASSIGNMENT_FONT_COLOR)
-		button.add_theme_color_override("font_hover_color", SELECTED_ASSIGNMENT_FONT_COLOR)
-		button.add_theme_color_override("font_pressed_color", SELECTED_ASSIGNMENT_FONT_COLOR)
-		button.add_theme_color_override("font_hover_pressed_color", SELECTED_ASSIGNMENT_FONT_COLOR)
-		button.add_theme_color_override("font_focus_color", SELECTED_ASSIGNMENT_FONT_COLOR)
-		button.add_theme_color_override("font_disabled_color", SELECTED_ASSIGNMENT_FONT_COLOR)
+		# 金色座次实底使用工厂计算的对比字色，身份语义色继续沿用白字。
+		var selected_font_color: Color = button.get_theme_color("font_color") if button.has_meta("seat_number") else SELECTED_ASSIGNMENT_FONT_COLOR
+		button.add_theme_color_override("font_color", selected_font_color)
+		button.add_theme_color_override("font_hover_color", selected_font_color)
+		button.add_theme_color_override("font_pressed_color", selected_font_color)
+		button.add_theme_color_override("font_hover_pressed_color", selected_font_color)
+		button.add_theme_color_override("font_focus_color", selected_font_color)
+		button.add_theme_color_override("font_disabled_color", selected_font_color)
 	else:
 		button.add_theme_color_override("font_focus_color", BATTLE_STYLE.get_color("button_font"))
 
